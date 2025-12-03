@@ -122,8 +122,8 @@ export const generateInteriorConcepts = async (
   // 3. 构建激进的“未来感” Prompt (中文深度适配)
   // 我们使用权重大于 1 的标记和明确的“概念艺术”词汇
   const basePrompt = `
-    (未来主义概念艺术:1.6), 2050年完全自动驾驶汽车内饰 (Concept Art)。
-    超现实主义，极度洁净，反重力设计。
+    (未来主义概念艺术:1.6), 2050年完全自动驾驶飞行汽车内饰 (Concept Art)。
+    超现实主义，太空歌剧风格，极度洁净，反重力设计。
     
     【核心必须执行】
     - ❌ 绝对禁止出现传统圆形方向盘 (No steering wheel)。
@@ -143,7 +143,7 @@ export const generateInteriorConcepts = async (
     - 广角俯视镜头 (Wide-angle top-down view)，展示座舱整体空间布局。
     - 8k分辨率，OC渲染 (Octane Render)，虚幻引擎5 (Unreal Engine 5)。
     - 电影级光效，丁达尔效应，体积光。
-    - 不显示车身结构，不显示车外场景。
+    - 窗外环境：抽象的未来城市流光或云端景象，不要写实街道。
   `;
 
   console.log("正在请求豆包生成 3 张图片 (激进未来版)...");
@@ -164,4 +164,37 @@ export const generateInteriorConcepts = async (
       // 5. 兜底逻辑
       const placeholders = [
         "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=1600&q=80",
-        "
+        "https://images.unsplash.com/photo-1553440569-bcc63803a83d?auto=format&fit=crop&w=1600&q=80",
+        "https://images.unsplash.com/photo-1503376763036-066120622c74?auto=format&fit=crop&w=1600&q=80"
+      ];
+
+      let finalImages = [...validImages];
+      let pIndex = 0;
+      while (finalImages.length < 3) {
+          finalImages.push(placeholders[pIndex % 3]);
+          pIndex++;
+      }
+      return finalImages;
+
+  } catch (error) {
+    console.error("批量生图失败:", error);
+    return [
+        "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=1600&q=80",
+        "https://images.unsplash.com/photo-1553440569-bcc63803a83d?auto=format&fit=crop&w=1600&q=80",
+        "https://images.unsplash.com/photo-1503376763036-066120622c74?auto=format&fit=crop&w=1600&q=80"
+    ];
+  }
+};
+
+export const generateSessionSummary = async (session: Session): Promise<string> => {
+    const r1Choices = session.round1.generatedConfigs.filter(c => session.round1.selectedConfigIds.includes(c.id)).map(c => c.title).join('; ');
+    const r2Choices = session.round2.generatedConfigs.filter(c => session.round2.selectedConfigIds.includes(c.id)).map(c => c.title).join('; ');
+    const e = session.round3.evaluation;
+    const evaluationText = `形态:${e.form.liked}, 比例:${e.proportion.liked}, 材质:${e.material.liked}, 色彩:${e.color.liked}`;
+    
+    const prompt = `请为本次未来汽车体验研究 Session 撰写一份300字总结。用户:${session.persona.familyStructure}, 需求:${session.persona.emotionalNeeds}。功能:${r1Choices}。交互:${r2Choices}。评价:${evaluationText}。`;
+    try {
+        const text = await callDoubaoTextAPI([{ role: "user", content: prompt }]);
+        return text || "生成总结失败";
+    } catch (e) { return "服务繁忙。"; }
+}
