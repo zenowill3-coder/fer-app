@@ -4,11 +4,11 @@ import { GeneratedConfig, Persona, Round1Data, Round2Data, Round3Data, Session }
 // 1. 配置区域
 // ============================================================
 const API_KEY = import.meta.env.VITE_DOUBAO_API_KEY;
-const TEXT_MODEL_ID = import.meta.env.VITE_DOUBAO_TEXT_ID;   // 对话模型
-const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID; // 生图模型
+const TEXT_MODEL_ID = import.meta.env.VITE_DOUBAO_TEXT_ID;
+const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID;
 
 // ============================================================
-// 2. 核心工具 A: 对话/文本推理 (保持不变)
+// 2. 核心工具 A: 对话 (Text)
 // ============================================================
 async function callDoubaoTextAPI(messages: any[]) {
   const url = "/api/doubao/v3/chat/completions";
@@ -33,38 +33,32 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 图片生成 (匹配官方 images/generations 接口)
+// 3. 核心工具 B: 生图 (图生图修复版)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string, imageBase64: string | null = null) {
-  // ⚠️ 关键修改：使用原生生图接口，而非 Chat 接口
-  // 对应官方文档: POST https://ark.cn-beijing.volces.com/api/v3/images/generations
   const url = "/api/doubao/v3/images/generations";
-  
   if (!IMAGE_MODEL_ID) throw new Error("生图模型ID未配置");
 
-  // 构造符合官方示例的 Body
+  // 1. 构造请求体
   const requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
-    // 官方参数: 2K分辨率效果更好，如果报错可改回 "1024*1024"
-    size: "1024*1024", 
-    // 官方推荐参数: 开启连续生成优化
-    sequential_image_generation: "auto" 
+    size: "1024*1024",
+    sequential_image_generation: "auto"
   };
 
-  // ⚠️ 核心逻辑：图生图 (Image-to-Image)
+  // 2. 【关键修复】处理参考图逻辑
   if (imageBase64) {
-    // 确保 Base64 格式完整
-    const formattedBase64 = imageBase64.startsWith("data:") 
-      ? imageBase64 
-      : `data:image/jpeg;base64,${imageBase64}`;
+    // ⚠️ 修正点：Gemini 发送的是去掉头部的纯 Base64，豆包通常也偏好这种格式
+    // 如果 imageBase64 包含 "data:image..." 头，我们把它去掉
+    const rawBase64 = imageBase64.includes("base64,") 
+      ? imageBase64.split("base64,")[1] 
+      : imageBase64;
     
-    // 直接放入 image 字段 (根据文档示例)
-    requestBody.image = formattedBase64;
+    // 将纯 Base64 填入 image 字段
+    requestBody.image = rawBase64;
     
-    // 图生图时，有时需要降低 prompt 的影响权重，或者增加 image 的权重
-    // 如果豆包支持 strength 参数 (0.0-1.0)，可以在这里调整。
-    // requestBody.strength = 0.7; 
+    console.log(">> 已注入参考图 (Raw Base64 格式)");
   }
 
   try {
@@ -79,9 +73,7 @@ async function callDoubaoImageAPI(prompt: string, imageBase64: string | null = n
         console.error("生图 API 报错:", err);
         return null;
     }
-    
     const data = await response.json();
-    // 官方文档 response_format="url" 时，返回 data[0].url
     return data.data?.[0]?.url || null;
 
   } catch (error) {
@@ -96,7 +88,7 @@ function cleanJsonResult(text: string): string {
 }
 
 // ============================================================
-// 4. 业务功能：文字生成 (保持不变)
+// 4. 业务功能 (Round 1 & 2)
 // ============================================================
 export const generateFunctionConfigs = async (persona: Persona, selectedKeywords: string[]): Promise<GeneratedConfig[]> => {
   const prompt = `
@@ -131,7 +123,7 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
 };
 
 // ============================================================
-// 5. 业务功能：Round 3 生图 (图生图逻辑)
+// 5. 业务功能 Round 3 (回归 Gemini 原始 Prompt 逻辑)
 // ============================================================
 export const generateInteriorConcepts = async (
   persona: Persona, 
@@ -145,40 +137,47 @@ export const generateInteriorConcepts = async (
   const r1Selected = r1Data.generatedConfigs.filter(c => r1Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   const r2Selected = r2Data.generatedConfigs.filter(c => r2Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   
-  // 2. 构建 Prompt (依然使用中文优化版，配合参考图食用效果更佳)
+  // 2. Prompt 构建 (回归 Gemini 原版逻辑的精准翻译)
+  // 之前我加了太多"2050"、"无方向盘"等词，可能干扰了参考图的权重
+  // 现在我们改回"忠实翻译"，让参考图发挥更大作用
   const basePrompt = `
     设计一张未来自动驾驶汽车内饰的概念艺术图 (Concept Art)。
     
-    【参考信息】
-    - 请基于传入的参考图片 (Reference Image) 进行设计，保持其构图和核心风格。
-    - 风格描述: ${styleDesc}
-    - 目标用户: ${persona.familyStructure}
+    【目标用户】: ${persona.familyStructure}
+    【使用场景】: 频繁使用 (${persona.travelFrequency}), 接受度: ${persona.adAcceptance}
+    【情绪氛围】: ${persona.emotionalNeeds.join(' ')}
+    【风格描述】: ${styleDesc}
     
-    【重点功能】
-    - 智能座舱: ${r1Selected}
-    - 交互体验: ${r2Selected}
+    【重点可视化功能】
+    ${r1Selected ? `- 智能座舱功能: ${r1Selected}` : ''}
+    ${r2Selected ? `- 交互体验功能: ${r2Selected}` : ''}
     
-    【必须执行的构图规则】
-    1. 视角: 广角高角度镜头 (Wide-angle high-angle)。
-    2. 角度: 俯拍内饰全景。
-    3. 内容: 仅展示汽车内饰，不要展示外观。
+    【关键相机与构图设置 (必须严格执行，忽略参考图的角度，但保留参考图的风格)】
+    1. 透视: 广角高角度镜头 / 顶视广角 (Wide-angle high-angle shot)。
+    2. 角度: 从上方斜向下拍摄，提供内饰空间的宏观概览。
+    3. 相机位置: 位于右后方上方。视点略高于右后座，透过前排座椅向前看向仪表板/驾驶区域。
+    4. 景深: 全景深（所有物体都清晰聚焦）。
+    5. 内容限制: 仅展示内饰。不要渲染车身外壳、轮廓、轮子或街道。画面必须被内饰座舱填满。
+    6. 车窗: 窗外仅展示抽象柔和光线或渐变色。不要出现具体的建筑物或风景。
     
     【视觉风格】
-    - 2050年未来感，OC渲染，电影级光效。
+    - 高质量，照片级真实感，未来主义渲染。
+    - 16:9 画幅。
+    - 电影级布光。
   `;
 
-  console.log("正在请求豆包生成 3 张图片 (图生图模式 v3)...");
-  if (styleImageBase64) console.log(">> 参考图已注入 Request Body");
+  console.log("正在请求豆包生成 3 张图片 (图生图模式)...");
+  if (styleImageBase64) console.log(">> 参考图 Base64 已准备");
 
-  // 3. 并发生成 3 张
+  // 3. 并发生成 3 张 (通过变体微调)
   const variations = [
-      "变体A：注重参考图的原始氛围",
-      "变体B：增强科技感和冷色调",
-      "变体C：增强舒适感和自然光"
+      "变体A：强调参考图的原始色调与质感",
+      "变体B：强调更强的科技线条与冷光",
+      "变体C：强调更柔和的居家氛围"
   ];
 
   try {
-      // 传入 styleImageBase64，函数内部会自动将其放入 'image' 字段
+      // 传入 styleImageBase64，由 callDoubaoImageAPI 处理去头逻辑
       const promises = variations.map(v => callDoubaoImageAPI(basePrompt + `\n(${v})`, styleImageBase64));
       
       const results = await Promise.all(promises);
