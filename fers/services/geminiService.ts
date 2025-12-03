@@ -4,11 +4,11 @@ import { GeneratedConfig, Persona, Round1Data, Round2Data, Round3Data, Session }
 // 1. 配置区域
 // ============================================================
 const API_KEY = import.meta.env.VITE_DOUBAO_API_KEY;
-const TEXT_MODEL_ID = import.meta.env.VITE_DOUBAO_TEXT_ID;   // 用于对话 (Round 1 & 2)
-const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID; // 用于生图 (Round 3)
+const TEXT_MODEL_ID = import.meta.env.VITE_DOUBAO_TEXT_ID;   // 对话模型
+const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID; // 生图模型
 
 // ============================================================
-// 2. 核心工具 A: 对话/文本推理 (Round 1 & 2)
+// 2. 核心工具 A: 对话/文本推理 (保持不变)
 // ============================================================
 async function callDoubaoTextAPI(messages: any[]) {
   const url = "/api/doubao/v3/chat/completions";
@@ -33,48 +33,45 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 图片生成 (支持图生图/垫图)
+// 3. 核心工具 B: 图片生成 (匹配官方 images/generations 接口)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string, imageBase64: string | null = null) {
-  // 根据你的 curl 示例，豆包的多模态也是走 chat/completions 结构
-  const url = "/api/doubao/v3/chat/completions"; 
+  // ⚠️ 关键修改：使用原生生图接口，而非 Chat 接口
+  // 对应官方文档: POST https://ark.cn-beijing.volces.com/api/v3/images/generations
+  const url = "/api/doubao/v3/images/generations";
   
   if (!IMAGE_MODEL_ID) throw new Error("生图模型ID未配置");
 
-  // 1. 构造多模态内容数组 (Content Array)
-  const contentParts: any[] = [
-    { type: "text", text: prompt } // 放入提示词
-  ];
+  // 构造符合官方示例的 Body
+  const requestBody: any = {
+    model: IMAGE_MODEL_ID,
+    prompt: prompt,
+    // 官方参数: 2K分辨率效果更好，如果报错可改回 "1024*1024"
+    size: "1024*1024", 
+    // 官方推荐参数: 开启连续生成优化
+    sequential_image_generation: "auto" 
+  };
 
-  // 2. 如果有参考图，复刻 Gemini 的垫图逻辑
+  // ⚠️ 核心逻辑：图生图 (Image-to-Image)
   if (imageBase64) {
-    // 确保 Base64 格式正确 (Data URL)
+    // 确保 Base64 格式完整
     const formattedBase64 = imageBase64.startsWith("data:") 
       ? imageBase64 
       : `data:image/jpeg;base64,${imageBase64}`;
-      
-    contentParts.push({
-      type: "image_url",
-      image_url: {
-        url: formattedBase64 // 豆包接收 URL 或 Data URI
-      }
-    });
+    
+    // 直接放入 image 字段 (根据文档示例)
+    requestBody.image = formattedBase64;
+    
+    // 图生图时，有时需要降低 prompt 的影响权重，或者增加 image 的权重
+    // 如果豆包支持 strength 参数 (0.0-1.0)，可以在这里调整。
+    // requestBody.strength = 0.7; 
   }
 
   try {
     const response = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": `Bearer ${API_KEY}` },
-      body: JSON.stringify({
-        model: IMAGE_MODEL_ID, // 使用生图模型 ID
-        messages: [
-          {
-            role: "user",
-            content: contentParts // 发送多模态内容
-          }
-        ],
-        stream: false
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
@@ -84,26 +81,8 @@ async function callDoubaoImageAPI(prompt: string, imageBase64: string | null = n
     }
     
     const data = await response.json();
-    
-    // 解析返回结果：
-    // 情况 A: 豆包返回的是文本 URL (Markdown 格式 ![image](url))
-    // 情况 B: 豆包返回的是标准 image 对象
-    // 这里做个兼容处理
-    const content = data.choices?.[0]?.message?.content || "";
-    
-    // 尝试从文本中提取 URL (如果返回的是 Markdown)
-    const urlMatch = content.match(/\((https?:\/\/.*?)\)/);
-    if (urlMatch && urlMatch[1]) return urlMatch[1];
-    
-    // 尝试直接获取 (如果模型直接返回 URL 字符串)
-    if (content.startsWith("http")) return content;
-
-    // 如果是标准 DALL-E 格式 (data[0].url)
-    if (data.data?.[0]?.url) return data.data[0].url;
-
-    // 如果都失败了，但在调试中
-    console.log("原始返回内容:", content);
-    return null;
+    // 官方文档 response_format="url" 时，返回 data[0].url
+    return data.data?.[0]?.url || null;
 
   } catch (error) {
     console.error("生图网络请求失败:", error);
@@ -152,7 +131,7 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
 };
 
 // ============================================================
-// 5. 业务功能：Round 3 生图 (中文Prompt + 垫图逻辑)
+// 5. 业务功能：Round 3 生图 (图生图逻辑)
 // ============================================================
 export const generateInteriorConcepts = async (
   persona: Persona, 
@@ -166,42 +145,40 @@ export const generateInteriorConcepts = async (
   const r1Selected = r1Data.generatedConfigs.filter(c => r1Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   const r2Selected = r2Data.generatedConfigs.filter(c => r2Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   
-  // 2. 构建 Prompt (基于上一版效果很好的中文指令)
+  // 2. 构建 Prompt (依然使用中文优化版，配合参考图食用效果更佳)
   const basePrompt = `
     设计一张未来自动驾驶汽车内饰的概念艺术图 (Concept Art)。
     
-    【设计输入】
+    【参考信息】
+    - 请基于传入的参考图片 (Reference Image) 进行设计，保持其构图和核心风格。
+    - 风格描述: ${styleDesc}
     - 目标用户: ${persona.familyStructure}
-    - 风格描述: ${styleDesc} (请重点参考输入的参考图)
-    - 情绪氛围: ${persona.emotionalNeeds.join(' ')}
     
-    【重点可视化功能】
-    ${r1Selected ? `- 智能座舱功能: ${r1Selected}` : ''}
-    ${r2Selected ? `- 交互体验功能: ${r2Selected}` : ''}
+    【重点功能】
+    - 智能座舱: ${r1Selected}
+    - 交互体验: ${r2Selected}
     
-    【关键构图设置 (必须严格执行)】
-    1. 透视: 广角高角度镜头 / 顶视广角 (Wide-angle high-angle shot)。
-    2. 角度: 从上方斜向下拍摄，提供内饰空间的宏观概览。
-    3. 景深: 全景深（所有物体都清晰聚焦）。
-    4. 内容限制: 仅展示内饰。不要渲染车身外壳。
+    【必须执行的构图规则】
+    1. 视角: 广角高角度镜头 (Wide-angle high-angle)。
+    2. 角度: 俯拍内饰全景。
+    3. 内容: 仅展示汽车内饰，不要展示外观。
     
     【视觉风格】
-    - 2050年未来主义，科幻感，OC渲染。
-    - 电影级布光，高对比度。
+    - 2050年未来感，OC渲染，电影级光效。
   `;
 
-  console.log("正在请求豆包生成 3 张图片 (图生图模式)...");
-  if (styleImageBase64) console.log(">> 已检测到参考图，将启用垫图逻辑");
+  console.log("正在请求豆包生成 3 张图片 (图生图模式 v3)...");
+  if (styleImageBase64) console.log(">> 参考图已注入 Request Body");
 
   // 3. 并发生成 3 张
   const variations = [
-      "变体A：强调温暖色调与舒适感",
-      "变体B：强调冷色调与科技线条",
-      "变体C：强调自然光感与通透性"
+      "变体A：注重参考图的原始氛围",
+      "变体B：增强科技感和冷色调",
+      "变体C：增强舒适感和自然光"
   ];
 
   try {
-      // 这里的关键改变：将 styleImageBase64 传给 callDoubaoImageAPI
+      // 传入 styleImageBase64，函数内部会自动将其放入 'image' 字段
       const promises = variations.map(v => callDoubaoImageAPI(basePrompt + `\n(${v})`, styleImageBase64));
       
       const results = await Promise.all(promises);
