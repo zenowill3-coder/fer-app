@@ -8,6 +8,42 @@ const TEXT_MODEL_ID = import.meta.env.VITE_DOUBAO_TEXT_ID;
 const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID;
 
 // ============================================================
+// 🆕 新增：图片压缩工具函数
+// 解决 Vercel 502 报错的核心：把几MB的大图压缩到 1MB 以内
+// ============================================================
+async function compressImage(base64Str: string, maxWidth = 1024, quality = 0.7): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.src = base64Str;
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      let width = img.width;
+      let height = img.height;
+
+      // 保持比例缩放
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) {
+        resolve(base64Str); // 失败则返回原图
+        return;
+      }
+      
+      ctx.drawImage(img, 0, 0, width, height);
+      // 压缩为 JPEG，质量 0.7
+      const compressedDataUrl = canvas.toDataURL('image/jpeg', quality);
+      resolve(compressedDataUrl);
+    };
+    img.onerror = () => resolve(base64Str); // 失败返回原图
+  });
+}
+
+// ============================================================
 // 2. 核心工具 A: 对话 (Text)
 // ============================================================
 async function callDoubaoTextAPI(messages: any[]) {
@@ -33,13 +69,12 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (图生图修复版)
+// 3. 核心工具 B: 生图 (压缩 + 重绘)
 // ============================================================
-async function callDoubaoImageAPI(prompt: string, imageBase64: string | null = null) {
+async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
   const url = "/api/doubao/v3/images/generations";
   if (!IMAGE_MODEL_ID) throw new Error("生图模型ID未配置");
 
-  // 1. 构造请求体
   const requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
@@ -47,18 +82,11 @@ async function callDoubaoImageAPI(prompt: string, imageBase64: string | null = n
     sequential_image_generation: "auto"
   };
 
-  // 2. 【关键修复】处理参考图逻辑
-  if (imageBase64) {
-    // ⚠️ 修正点：Gemini 发送的是去掉头部的纯 Base64，豆包通常也偏好这种格式
-    // 如果 imageBase64 包含 "data:image..." 头，我们把它去掉
-    const rawBase64 = imageBase64.includes("base64,") 
-      ? imageBase64.split("base64,")[1] 
-      : imageBase64;
-    
-    // 将纯 Base64 填入 image 字段
-    requestBody.image = rawBase64;
-    
-    console.log(">> 已注入参考图 (Raw Base64 格式)");
+  if (compressedBase64) {
+    // 此时传入的已经是压缩过的 Base64，且去掉了头部
+    requestBody.image = compressedBase64;
+    requestBody.strength = 0.8; // 稍微降低一点点重绘幅度，保证稳定性
+    // console.log(">> 发送压缩后的参考图...");
   }
 
   try {
@@ -88,7 +116,7 @@ function cleanJsonResult(text: string): string {
 }
 
 // ============================================================
-// 4. 业务功能 (Round 1 & 2)
+// 4. 业务功能 (Round 1 & 2) - 保持不变
 // ============================================================
 export const generateFunctionConfigs = async (persona: Persona, selectedKeywords: string[]): Promise<GeneratedConfig[]> => {
   const prompt = `
@@ -123,7 +151,7 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
 };
 
 // ============================================================
-// 5. 业务功能 Round 3 (回归 Gemini 原始 Prompt 逻辑)
+// 5. 业务功能 Round 3 (图片压缩 + 串行执行)
 // ============================================================
 export const generateInteriorConcepts = async (
   persona: Persona, 
@@ -133,83 +161,80 @@ export const generateInteriorConcepts = async (
   styleImageBase64: string | null
 ): Promise<string[]> => {
   
-  // 1. 数据准备
   const r1Selected = r1Data.generatedConfigs.filter(c => r1Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   const r2Selected = r2Data.generatedConfigs.filter(c => r2Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   
-  // 2. Prompt 构建 (回归 Gemini 原版逻辑的精准翻译)
-  // 之前我加了太多"2050"、"无方向盘"等词，可能干扰了参考图的权重
-  // 现在我们改回"忠实翻译"，让参考图发挥更大作用
   const basePrompt = `
-    设计一张未来自动驾驶汽车内饰的概念艺术图 (Concept Art)。
+    (车辆内饰概念图:1.5), 2050年自动驾驶座舱内部视角。
+    ❌ 不要画车身外观，❌ 不要画街道。✅ 只画车内座椅和仪表台。
     
-    【目标用户】: ${persona.familyStructure}
-    【使用场景】: 频繁使用 (${persona.travelFrequency}), 接受度: ${persona.adAcceptance}
-    【情绪氛围】: ${persona.emotionalNeeds.join(' ')}
-    【风格描述】: ${styleDesc}
+    【设计输入】
+    - 目标用户: ${persona.familyStructure}
+    - 风格参考: ${styleDesc} (请提取参考图的色调与光影，应用到内饰中)
+    - 情绪氛围: ${persona.emotionalNeeds.join(' ')}
     
-    【重点可视化功能】
-    ${r1Selected ? `- 智能座舱功能: ${r1Selected}` : ''}
-    ${r2Selected ? `- 交互体验功能: ${r2Selected}` : ''}
+    【功能可视化】
+    - ${r1Selected}
+    - ${r2Selected}
     
-    【关键相机与构图设置 (必须严格执行，忽略参考图的角度，但保留参考图的风格)】
-    1. 透视: 广角高角度镜头 / 顶视广角 (Wide-angle high-angle shot)。
-    2. 角度: 从上方斜向下拍摄，提供内饰空间的宏观概览。
-    3. 相机位置: 位于右后方上方。视点略高于右后座，透过前排座椅向前看向仪表板/驾驶区域。
-    4. 景深: 全景深（所有物体都清晰聚焦）。
-    5. 内容限制: 仅展示内饰。不要渲染车身外壳、轮廓、轮子或街道。画面必须被内饰座舱填满。
-    6. 车窗: 窗外仅展示抽象柔和光线或渐变色。不要出现具体的建筑物或风景。
+    【构图要求】
+    1. 视角: 广角俯视镜头 (Interior Wide-angle top-down)。
+    2. 内容: 100% 车辆内部画面。
     
     【视觉风格】
-    - 高质量，照片级真实感，未来主义渲染。
-    - 16:9 画幅。
-    - 电影级布光。
+    - 8k分辨率，OC渲染，电影级光效。
   `;
 
-  console.log("正在请求豆包生成 3 张图片 (图生图模式)...");
-  if (styleImageBase64) console.log(">> 参考图 Base64 已准备");
+  console.log("正在准备生图...");
+  
+  // 1. 预处理图片：压缩！
+  let processedBase64: string | null = null;
+  if (styleImageBase64) {
+    console.log(">> 正在压缩参考图以防止 502 错误...");
+    // 压缩到 1024 宽，0.6 质量，大幅减小体积
+    const compressedDataUrl = await compressImage(styleImageBase64, 1024, 0.6);
+    // 去掉头部，只留 Base64 字符串
+    processedBase64 = compressedDataUrl.split("base64,")[1];
+    console.log(">> 压缩完成，准备发送");
+  }
 
-  // 3. 并发生成 3 张 (通过变体微调)
   const variations = [
-      "变体A：强调参考图的原始色调与质感",
-      "变体B：强调更强的科技线条与冷光",
-      "变体C：强调更柔和的居家氛围"
+      "变体A：强调参考图的配色与材质感",
+      "变体B：更强的科技感内饰",
+      "变体C：更通透的居家氛围"
   ];
 
-  try {
-      // 传入 styleImageBase64，由 callDoubaoImageAPI 处理去头逻辑
-      const promises = variations.map(v => callDoubaoImageAPI(basePrompt + `\n(${v})`, styleImageBase64));
-      
-      const results = await Promise.all(promises);
-      const validImages = results.filter(url => url !== null) as string[];
-
-      // 4. 兜底逻辑
-      const placeholders = [
-        "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1553440569-bcc63803a83d?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1503376763036-066120622c74?auto=format&fit=crop&w=1600&q=80"
-      ];
-
-      let finalImages = [...validImages];
-      let pIndex = 0;
-      while (finalImages.length < 3) {
-          finalImages.push(placeholders[pIndex % 3]);
-          pIndex++;
-      }
-      return finalImages;
-
-  } catch (error) {
-    console.error("批量生图失败:", error);
-    return [
-        "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1553440569-bcc63803a83d?auto=format&fit=crop&w=1600&q=80",
-        "https://images.unsplash.com/photo-1503376763036-066120622c74?auto=format&fit=crop&w=1600&q=80"
-    ];
+  const validImages: string[] = [];
+  
+  // 2. 串行执行 (Sequential Execution)
+  // 为了防止瞬间流量过大再次触发 502，我们改为一张张生成
+  // 虽然慢一点，但成功率高
+  for (const v of variations) {
+    try {
+      const imgUrl = await callDoubaoImageAPI(basePrompt + `\n(${v})`, processedBase64);
+      if (imgUrl) validImages.push(imgUrl);
+    } catch (e) {
+      console.error("单张生成失败，继续下一张", e);
+    }
   }
+
+  // 3. 兜底逻辑
+  const placeholders = [
+    "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=1600&q=80",
+    "https://images.unsplash.com/photo-1553440569-bcc63803a83d?auto=format&fit=crop&w=1600&q=80",
+    "https://images.unsplash.com/photo-1503376763036-066120622c74?auto=format&fit=crop&w=1600&q=80"
+  ];
+
+  let finalImages = [...validImages];
+  let pIndex = 0;
+  while (finalImages.length < 3) {
+      finalImages.push(placeholders[pIndex % 3]);
+      pIndex++;
+  }
+  return finalImages;
 };
 
 export const generateSessionSummary = async (session: Session): Promise<string> => {
-    // 保持原有逻辑
     const r1Choices = session.round1.generatedConfigs.filter(c => session.round1.selectedConfigIds.includes(c.id)).map(c => c.title).join('; ');
     const r2Choices = session.round2.generatedConfigs.filter(c => session.round2.selectedConfigIds.includes(c.id)).map(c => c.title).join('; ');
     const e = session.round3.evaluation;
