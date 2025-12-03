@@ -28,7 +28,7 @@ async function compressImage(base64Str: string, maxWidth = 800, quality = 0.5): 
       const ctx = canvas.getContext('2d');
       if (!ctx) { resolve(base64Str); return; }
       ctx.drawImage(img, 0, 0, width, height);
-      // 返回完整的 Data URL (包含 data:image/jpeg;base64,...)
+      // 返回完整的 Data URL
       resolve(canvas.toDataURL('image/jpeg', quality));
     };
     img.onerror = () => resolve(base64Str);
@@ -61,7 +61,7 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (DataURI 修复)
+// 3. 核心工具 B: 生图 (参数修正)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
   const url = "/api/doubao/v3/images/generations";
@@ -70,17 +70,15 @@ async function callDoubaoImageAPI(prompt: string, compressedBase64: string | nul
   const requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
-    size: "1024*1024",
+    // 🛠️ 【关键修复】: 之前写成了 1024*1024 (星号)，导致报错
+    // 现在改为 1024x1024 (小写字母x)，或者直接用 "2k"
+    size: "1024x1024", 
     sequential_image_generation: "auto"
   };
 
   if (compressedBase64) {
-    // 🛠️ 【关键修复】: 不要去掉头部！
-    // 豆包报错 "invalid url" 说明它需要 Data URI 格式 (data:image/jpeg;base64,...)
-    // 或者标准的 http 链接。compressedBase64 本身就是完整的 Data URL。
+    // 豆包 API 需要完整的 Data URI (包含 data:image/...)
     requestBody.image = compressedBase64;
-    
-    // 保持重绘幅度设置
     requestBody.strength = 0.8; 
   }
 
@@ -180,7 +178,7 @@ export const generateInteriorConcepts = async (
     - 8k分辨率，OC渲染，电影级光效。
   `;
 
-  console.log("🚀 [DataURI 修复版] 正在启动生图流程...");
+  console.log("🚀 [参数修复版] 正在启动生图流程...");
   
   let processedBase64: string | null = null;
   if (styleImageBase64) {
