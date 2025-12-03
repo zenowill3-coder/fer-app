@@ -11,7 +11,6 @@ const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID; // 用于生图
 // 2. 核心工具 A: 对话/文本推理
 // ============================================================
 async function callDoubaoTextAPI(messages: any[]) {
-  // 必须配合 vercel.json 使用
   const url = "/api/doubao/v3/chat/completions";
 
   try {
@@ -43,7 +42,6 @@ async function callDoubaoTextAPI(messages: any[]) {
 // 3. 核心工具 B: 图片生成 (Image Generation)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string) {
-  // 使用 Vercel 代理转发到豆包生图接口
   const url = "/api/doubao/v3/images/generations";
 
   if (!IMAGE_MODEL_ID) throw new Error("生图模型ID未配置");
@@ -58,18 +56,18 @@ async function callDoubaoImageAPI(prompt: string) {
       body: JSON.stringify({
         model: IMAGE_MODEL_ID,
         prompt: prompt,
-        size: "1024x1024" // 豆包标准尺寸
+        size: "1024x1024"
       })
     });
 
     if (!response.ok) {
         const err = await response.text();
         console.error("生图 API 报错:", err);
-        return null; // 失败返回 null
+        return null;
     }
     
     const data = await response.json();
-    // 豆包/OpenAI 格式返回 data[0].url
+    // 兼容豆包/OpenAI 返回格式
     return data.data?.[0]?.url || null;
 
   } catch (error) {
@@ -86,11 +84,10 @@ function cleanJsonResult(text: string): string {
 
 
 // ============================================================
-// 4. 业务功能：Round 1 & 2 (完全还原你的原始 Prompt)
+// 4. 业务功能：Round 1 & 2 (文字生成)
 // ============================================================
 
 export const generateFunctionConfigs = async (persona: Persona, selectedKeywords: string[]): Promise<GeneratedConfig[]> => {
-  // 还原原始 Prompt
   const prompt = `
     你是一位资深的未来汽车用户体验研究专家。
     基于以下用户画像和感性需求，生成 6 个最具创新性的功能配置。
@@ -134,7 +131,6 @@ export const generateFunctionConfigs = async (persona: Persona, selectedKeywords
 };
 
 export const generateInteractionConfigs = async (persona: Persona, selectedKeywords: string[]): Promise<GeneratedConfig[]> => {
-  // 还原原始 Prompt
   const prompt = `
     你是一位资深的未来汽车交互设计专家。
     基于以下用户画像和交互感性词，生成 6 个创新的交互体验配置。
@@ -177,7 +173,7 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
 
 
 // ============================================================
-// 5. 业务功能：Round 3 生图 (还原你的并发3张逻辑)
+// 5. 业务功能：Round 3 生图 (已深度适配中文/豆包逻辑)
 // ============================================================
 
 export const generateInteriorConcepts = async (
@@ -188,52 +184,51 @@ export const generateInteriorConcepts = async (
   styleImageBase64: string | null
 ): Promise<string[]> => {
   
-  // 1. 数据准备
+  // 1. 数据准备 (将用户选的配置合并为字符串)
   const r1Selected = r1Data.generatedConfigs
     .filter(c => r1Data.selectedConfigIds.includes(c.id))
     .map(c => c.title)
-    .join(', ');
+    .join('、'); // 改为中文顿号连接
 
   const r2Selected = r2Data.generatedConfigs
     .filter(c => r2Data.selectedConfigIds.includes(c.id))
     .map(c => c.title)
-    .join(', ');
+    .join('、');
 
-  // 2. 还原原始的详细 Prompt (Critical Camera Settings 等)
+  // 2. 构建中文 Prompt (专为豆包优化)
+  // 我们将之前的英文技术参数翻译成了更符合国内生图模型理解的中文术语
   const basePrompt = `
-    Design a futuristic autonomous car interior (Concept Art).
+    设计一张未来自动驾驶汽车的内饰概念图 (Concept Art)。
     
-    Target User: ${persona.familyStructure}.
-    Context: Frequent use (${persona.travelFrequency}), Acceptance: ${persona.adAcceptance}.
-    Mood: ${persona.emotionalNeeds.join(', ')}.
-    Style Description: ${styleDesc}.
+    【核心参数】
+    - 目标用户: ${persona.familyStructure}
+    - 用户接受度: ${persona.adAcceptance}
+    - 整体氛围: ${persona.emotionalNeeds.join(' ')}
+    - 风格描述: ${styleDesc}
     
-    Key Features to Visualize:
-    ${r1Selected ? `Functional Features: ${r1Selected}` : 'Smart Cabin features'}
-    ${r2Selected ? `Interaction Features: ${r2Selected}` : 'Immersive Experience'}
+    【重点展示功能】
+    - 智能座舱功能: ${r1Selected}
+    - 交互体验亮点: ${r2Selected}
     
-    CRITICAL CAMERA & COMPOSITION SETTINGS (MUST FOLLOW EXACTLY):
-    1. PERSPECTIVE: Wide-angle high-angle shot / Overhead wide-angle lens.
-    2. ANGLE: Shot from above diagonally downwards to provide a macro overview of the interior space.
-    3. CAMERA POSITION: Located above the rear right side. The viewpoint is slightly higher than the rear right seat, looking forward through the front seats towards the dashboard/driving area.
-    4. DEPTH OF FIELD: Full depth of field (everything in focus).
-    5. CONTENT CONSTRAINT: INTERIOR ONLY. DO NOT render the car's exterior body shell, outlines, wheels, or street. The frame must be filled with the interior cabin.
-    6. WINDOWS: Abstract soft light or gradients only outside. No buildings or landscapes.
+    【画面构图要求 (必须严格执行)】
+    1. 视角: 广角俯视镜头 (Wide-angle high-angle shot)。
+    2. 机位: 从车内右后方上方俯拍，能够看清前排仪表台、座椅布局以及整个内饰空间关系。
+    3. 景深: 全景深，前后景都清晰 (Full depth of field)。
+    4. 构图内容: 仅展示汽车内饰，不要出现车身外观、轮子或街道背景。窗外使用抽象的柔和光影或渐变色，不要具体的城市建筑。
     
-    Visual Style:
-    - High quality, photorealistic, futuristic rendering.
-    - 16:9 Aspect Ratio.
-    - Cinematic lighting.
+    【视觉风格】
+    - 极高画质，8k分辨率，真实感渲染 (Photorealistic)。
+    - 未来感，科技感，电影级布光 (Cinematic lighting)。
+    - 16:9 画幅。
   `;
 
-  console.log("正在请求豆包生成 3 张图片...");
+  console.log("正在请求豆包生成 3 张图片 (中文Prompt模式)...");
 
-  // 3. 并发生成 3 张 (还原 Promise.all 逻辑)
-  // 为了防止生成的图一模一样，我们给每个请求加一点微小的随机噪点词
+  // 3. 并发生成 3 张 (使用中文描述差异化)
   const variations = [
-      "Variation 1: emphasize warm lighting",
-      "Variation 2: emphasize clean lines",
-      "Variation 3: emphasize spacious feeling"
+      "变体1：强调温暖舒适的居家氛围灯光",
+      "变体2：强调极简干净的科技感线条",
+      "变体3：强调通透宽敞的自然光感"
   ];
 
   try {
@@ -242,18 +237,16 @@ export const generateInteriorConcepts = async (
       
       const results = await Promise.all(promises);
       
-      // 过滤掉失败的 (null)
+      // 过滤掉失败的
       const validImages = results.filter(url => url !== null) as string[];
 
-      // 4. 兜底逻辑：如果生成的少于 3 张，用占位图补齐
-      // 这样保证你的 UI 不会因为只有 1 张图而排版错乱
+      // 4. 兜底补齐逻辑
       const placeholders = [
         "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=1600&q=80",
         "https://images.unsplash.com/photo-1553440569-bcc63803a83d?auto=format&fit=crop&w=1600&q=80",
         "https://images.unsplash.com/photo-1503376763036-066120622c74?auto=format&fit=crop&w=1600&q=80"
       ];
 
-      // 补齐到 3 张
       let finalImages = [...validImages];
       let pIndex = 0;
       while (finalImages.length < 3) {
@@ -265,7 +258,6 @@ export const generateInteriorConcepts = async (
 
   } catch (error) {
     console.error("批量生图失败:", error);
-    // 全部失败时的兜底
     return [
         "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=1600&q=80",
         "https://images.unsplash.com/photo-1553440569-bcc63803a83d?auto=format&fit=crop&w=1600&q=80",
@@ -275,7 +267,7 @@ export const generateInteriorConcepts = async (
 };
 
 export const generateSessionSummary = async (session: Session): Promise<string> => {
-    // 还原原始 Prompt
+    // 数据处理保持不变
     const r1Choices = session.round1.generatedConfigs
         .filter(c => session.round1.selectedConfigIds.includes(c.id))
         .map(c => `${c.title} (${c.description})`)
