@@ -1,0 +1,239 @@
+
+import React, { useRef } from 'react';
+import { Session, Evaluation } from '../types';
+import html2canvas from 'html2canvas';
+import jsPDF from 'jspdf';
+import { Download, Loader2, Home } from 'lucide-react';
+
+interface SummaryProps {
+  session: Session;
+  onDone: () => void;
+}
+
+const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [exporting, setExporting] = React.useState(false);
+
+  // Filter for selected choices
+  const r1Choices = session.round1.generatedConfigs.filter(c => session.round1.selectedConfigIds.includes(c.id));
+  const r2Choices = session.round2.generatedConfigs.filter(c => session.round2.selectedConfigIds.includes(c.id));
+  
+  const finalImage = session.round3.generatedImages[session.round3.selectedImageIndex || 0];
+  const isSummaryGenerating = session.status === 'completed' && !session.aiSummary;
+
+  const e = session.round3.evaluation;
+  const evaluationCategories: { key: keyof Evaluation, label: string }[] = [
+      { key: 'form', label: '形态感知' },
+      { key: 'proportion', label: '比例分量' },
+      { key: 'material', label: '材质触感' },
+      { key: 'color', label: '色彩' },
+  ];
+
+
+  const handleExportPDF = async () => {
+    if (!contentRef.current) return;
+    setExporting(true);
+    
+    try {
+        const canvas = await html2canvas(contentRef.current, { scale: 2, useCORS: true });
+        const imgData = canvas.toDataURL('image/png');
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        
+        const pdfWidth = pdf.internal.pageSize.getWidth();
+        const pdfHeight = pdf.internal.pageSize.getHeight();
+        const imgWidth = canvas.width;
+        const imgHeight = canvas.height;
+        const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
+        
+        const imgX = (pdfWidth - imgWidth * ratio) / 2;
+        const imgY = 0; // Top aligned
+        
+        // Calculate height needed
+        const renderHeight = imgHeight * (pdfWidth / imgWidth);
+        
+        // Strategy: Scale to fit width, add pages if needed (simplified)
+        if (renderHeight > pdfHeight) {
+             let heightLeft = renderHeight;
+             let position = 0;
+             const pageHeight = pdfHeight;
+             
+             pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, renderHeight);
+             heightLeft -= pageHeight;
+             
+             while (heightLeft >= 0) {
+               position = heightLeft - renderHeight;
+               pdf.addPage();
+               pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, renderHeight);
+               heightLeft -= pageHeight;
+             }
+        } else {
+             pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, renderHeight);
+        }
+
+        pdf.save(`FERS_Report_${session.id}.pdf`);
+    } catch (e) {
+        console.error("PDF Export Error", e);
+        alert("导出 PDF 失败");
+    } finally {
+        setExporting(false);
+    }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-8 pb-20">
+      <div className="flex justify-between items-center">
+        <h1 className="text-3xl font-bold text-slate-900">Session Summary</h1>
+        <button onClick={onDone} className="text-indigo-600 hover:underline flex items-center gap-1">
+             <Home size={16} /> 返回首页
+        </button>
+      </div>
+
+      {isSummaryGenerating ? (
+          <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl shadow-sm">
+              <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
+              <p className="text-slate-600 text-lg">AI 正在生成研究总结报告...</p>
+              <p className="text-slate-400 text-sm mt-2">您可以稍后回来查看</p>
+          </div>
+      ) : (
+        <>
+            {/* Report Container for PDF */}
+            <div ref={contentRef} className="bg-white p-10 shadow-lg rounded-none md:rounded-2xl space-y-8 text-slate-800">
+                {/* Header */}
+                <div className="border-b-2 border-slate-900 pb-6 mb-8">
+                    <h2 className="text-4xl font-extrabold text-slate-900 mb-2">未来体验研究报告</h2>
+                    <div className="flex justify-between text-slate-500 text-sm mt-4">
+                        <span>Session ID: {session.id.slice(-6).toUpperCase()}</span>
+                        <span>Date: {new Date(session.updatedAt).toLocaleDateString()}</span>
+                    </div>
+                </div>
+
+                {/* Persona */}
+                <section className="bg-slate-50 p-6 rounded-xl border border-slate-100">
+                    <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider">01 用户画像</h3>
+                    <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                            <div className="bg-white p-3 rounded-lg border border-slate-100">
+                                <span className="block text-slate-400 mb-1">家庭结构</span>
+                                <span className="font-medium text-base">{session.persona.familyStructure}</span>
+                            </div>
+                            <div className="bg-white p-3 rounded-lg border border-slate-100">
+                                <span className="block text-slate-400 mb-1">出行频率</span>
+                                <span className="font-medium text-base">{session.persona.travelFrequency}</span>
+                            </div>
+                            <div className="bg-white p-3 rounded-lg border border-slate-100">
+                                <span className="block text-slate-400 mb-1">自动驾驶认知</span>
+                                <span className="font-medium text-base">{session.persona.adKnowledge}</span>
+                            </div>
+                            <div className="bg-white p-3 rounded-lg border border-slate-100">
+                                <span className="block text-slate-400 mb-1">自动驾驶接受度</span>
+                                <span className="font-medium text-base">{session.persona.adAcceptance}</span>
+                            </div>
+                        </div>
+                        <div className="pt-2">
+                             <span className="block text-slate-400 text-sm mb-2">深层需求</span>
+                             <div className="flex flex-wrap gap-2">
+                                {session.persona.emotionalNeeds.map(n => (
+                                    <span key={n} className="px-3 py-1 bg-pink-50 text-pink-700 rounded-full text-xs font-medium border border-pink-100">{n}</span>
+                                ))}
+                                {session.persona.socialNeeds.map(n => (
+                                    <span key={n} className="px-3 py-1 bg-amber-50 text-amber-700 rounded-full text-xs font-medium border border-amber-100">{n}</span>
+                                ))}
+                             </div>
+                        </div>
+                    </div>
+                </section>
+
+                {/* AI Summary */}
+                <section>
+                    <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">02 AI 智能洞察</h3>
+                    <div className="text-slate-700 leading-relaxed whitespace-pre-wrap bg-indigo-50/50 p-6 rounded-xl border border-indigo-100">
+                        {session.aiSummary}
+                    </div>
+                </section>
+
+                {/* Visual */}
+                <section>
+                    <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">03 最终概念方案与评价</h3>
+                    <div className="rounded-xl overflow-hidden border-2 border-slate-100 shadow-lg">
+                        <img src={finalImage} alt="Final Concept" className="w-full h-auto" />
+                    </div>
+                    <div className="mt-6 space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+                            {evaluationCategories.map(cat => (
+                                <div key={cat.key}>
+                                    <h5 className="font-semibold text-sm text-slate-600 mb-2">{cat.label}</h5>
+                                    <div className="space-y-2">
+                                        <p className="text-sm bg-green-50 text-green-800 p-3 rounded-lg border border-green-100 whitespace-pre-wrap">
+                                            <span className="font-bold">喜欢:</span> {e[cat.key].liked || '未填写'}
+                                        </p>
+                                        <p className="text-sm bg-red-50 text-red-800 p-3 rounded-lg border border-red-100 whitespace-pre-wrap">
+                                            <span className="font-bold">不喜欢:</span> {e[cat.key].disliked || '未填写'}
+                                        </p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </section>
+
+                {/* Round 1 & 2 Details */}
+                <div className="grid md:grid-cols-2 gap-8 pt-4">
+                    <section>
+                        <h3 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wider border-b border-slate-200 pb-1">功能配置 (Round 1)</h3>
+                        <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 space-y-3">
+                            {r1Choices.length > 0 ? r1Choices.map(c => (
+                                <div key={c.id} className="border-b border-blue-100 last:border-0 pb-2 last:pb-0">
+                                    <h4 className="font-bold text-blue-900 text-sm">{c.title}</h4>
+                                    <p className="text-xs text-blue-800 mt-0.5">{c.description}</p>
+                                </div>
+                            )) : <p className="text-sm text-slate-400">未选择配置</p>}
+                            
+                            {session.round1.comment && (
+                                <div className="pt-2 border-t border-blue-200">
+                                    <p className="text-xs text-blue-600 italic">备注: "{session.round1.comment}"</p>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+                    <section>
+                        <h3 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wider border-b border-slate-200 pb-1">交互体验 (Round 2)</h3>
+                        <div className="bg-pink-50 p-4 rounded-lg border border-pink-100 space-y-3">
+                             {r2Choices.length > 0 ? r2Choices.map(c => (
+                                <div key={c.id} className="border-b border-pink-100 last:border-0 pb-2 last:pb-0">
+                                    <h4 className="font-bold text-pink-900 text-sm">{c.title}</h4>
+                                    <p className="text-xs text-pink-800 mt-0.5">{c.description}</p>
+                                </div>
+                            )) : <p className="text-sm text-slate-400">未选择配置</p>}
+
+                            {session.round2.comment && (
+                                <div className="pt-2 border-t border-pink-200">
+                                    <p className="text-xs text-pink-600 italic">备注: "{session.round2.comment}"</p>
+                                </div>
+                            )}
+                        </div>
+                    </section>
+                </div>
+
+                <div className="text-center pt-10 text-slate-300 text-xs">
+                    Generated by FERS System
+                </div>
+            </div>
+
+            {/* Export Action */}
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/80 backdrop-blur-md border-t border-slate-200 flex justify-center z-40">
+                <button
+                    onClick={handleExportPDF}
+                    disabled={exporting}
+                    className="flex items-center gap-2 px-10 py-3 rounded-full text-lg font-medium shadow-lg bg-slate-900 text-white hover:bg-black transition-all"
+                >
+                    {exporting ? <Loader2 className="animate-spin"/> : <Download />}
+                    {exporting ? '正在导出 PDF...' : '导出 PDF 报告'}
+                </button>
+            </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+export default Summary;
