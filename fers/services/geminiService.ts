@@ -283,4 +283,61 @@ export const generateSessionSummary = async (session: Session): Promise<string> 
         
     const r2Choices = session.round2.generatedConfigs
         .filter(c => session.round2.selectedConfigIds.includes(c.id))
-        .map(
+        .map(c => `${c.title} (${c.description})`)
+        .join('; ');
+
+    const e = session.round3.evaluation;
+    const evaluationText = `
+      - 形态感知:
+        - 喜欢的点: ${e.form.liked || '未填写'}
+        - 不喜欢的点: ${e.form.disliked || '未填写'}
+      - 比例分量:
+        - 喜欢的点: ${e.proportion.liked || '未填写'}
+        - 不喜欢的点: ${e.proportion.disliked || '未填写'}
+      - 材质触感:
+        - 喜欢的点: ${e.material.liked || '未填写'}
+        - 不喜欢的点: ${e.material.disliked || '未填写'}
+      - 色彩:
+        - 喜欢的点: ${e.color.liked || '未填写'}
+        - 不喜欢的点: ${e.color.disliked || '未填写'}
+    `;
+
+    const prompt = `
+      请为本次未来汽车体验研究 Session 撰写一份专业的总结报告。
+      
+      【用户数据】
+      家庭结构: ${session.persona.familyStructure}
+      出行频率: ${session.persona.travelFrequency}
+      自动驾驶认知: ${session.persona.adKnowledge}
+      自动驾驶接受度: ${session.persona.adAcceptance}
+      核心需求: ${session.persona.emotionalNeeds.join(', ')}, ${session.persona.socialNeeds.join(', ')}
+      
+      【Round 1: 功能需求】
+      选择配置: ${r1Choices || '无'}
+      用户备注: ${session.round1.comment}
+      
+      【Round 2: 交互体验】
+      选择配置: ${r2Choices || '无'}
+      用户备注: ${session.round2.comment}
+      
+      【Round 3: 设计偏好】
+      风格描述: ${session.round3.styleDescription}
+      评价: ${evaluationText}
+
+      【任务】
+      请输出一段约 300-400 字的总结，包含：
+      1. 用户画像与核心痛点分析
+      2. 功能偏好与场景亮点总结
+      3. 交互体验模式洞察
+      4. 视觉设计风格与改进建议
+      
+      语气专业、客观、有洞察力。仅输出纯文本，不要 markdown 格式。
+    `;
+
+    try {
+        const text = await callDoubaoTextAPI([{ role: "user", content: prompt }]);
+        return text || "生成总结失败";
+    } catch (e) {
+        return "服务繁忙，无法生成总结。";
+    }
+}
