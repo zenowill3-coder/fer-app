@@ -8,9 +8,9 @@ const TEXT_MODEL_ID = import.meta.env.VITE_DOUBAO_TEXT_ID;
 const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID;
 
 // ============================================================
-// 🆕 图片压缩工具
+// 🛠️ 极限图片压缩
 // ============================================================
-async function compressImage(base64Str: string, maxWidth = 800, quality = 0.5): Promise<string> {
+async function compressImage(base64Str: string, maxWidth = 512, quality = 0.4): Promise<string> {
   return new Promise((resolve) => {
     const img = new Image();
     img.src = base64Str.startsWith('data:') ? base64Str : `data:image/jpeg;base64,${base64Str}`;
@@ -25,7 +25,8 @@ async function compressImage(base64Str: string, maxWidth = 800, quality = 0.5): 
       canvas.width = width;
       canvas.height = height;
       const ctx = canvas.getContext('2d');
-      if (!ctx) { resolve(base64Str); return; }
+      if (!ctx) { resolve(img.src); return; }
+      
       ctx.drawImage(img, 0, 0, width, height);
       resolve(canvas.toDataURL('image/jpeg', quality));
     };
@@ -59,7 +60,7 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (修正分辨率参数)
+// 3. 核心工具 B: 生图 (2K 高清版)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
   const url = "/api/doubao/v3/images/generations";
@@ -68,15 +69,15 @@ async function callDoubaoImageAPI(prompt: string, compressedBase64: string | nul
   const requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
-    // 🛠️ 【最终修复】: 模型嫌弃 1024x1024 太小，必须用 2k
-    // 2k 对应约 368万像素，正好满足 "at least 3686400 pixels" 的要求
+    // ✅ 必须用 2k，否则模型会报 400 错误 (Pixel count too low)
     size: "2k", 
     sequential_image_generation: "auto"
   };
 
   if (compressedBase64) {
     requestBody.image = compressedBase64;
-    requestBody.strength = 0.8; 
+    // 0.7 是个比较安全的值，太高(0.9)容易崩坏，太低(0.5)不像内饰
+    requestBody.strength = 0.7; 
   }
 
   try {
@@ -175,14 +176,14 @@ export const generateInteriorConcepts = async (
     - 8k分辨率，OC渲染，电影级光效。
   `;
 
-  console.log("🚀 [参数修正版 v4.0] 正在启动生图流程...");
+  console.log("🛡️ [2K 修复版] 启动...");
   
   let processedBase64: string | null = null;
   if (styleImageBase64) {
-    console.log("🚀 >> 检测到参考图，正在压缩...");
+    console.log("🛡️ >> 极限压缩参考图 (Max 512px)...");
     try {
-        processedBase64 = await compressImage(styleImageBase64, 800, 0.5);
-        console.log("🚀 >> 压缩成功");
+        processedBase64 = await compressImage(styleImageBase64, 512, 0.4);
+        console.log("🛡️ >> 压缩成功");
     } catch (e) {
         console.error("压缩失败", e);
         processedBase64 = null;
@@ -197,13 +198,14 @@ export const generateInteriorConcepts = async (
 
   const validImages: string[] = [];
   
+  // 串行执行
   for (const [index, v] of variations.entries()) {
     try {
-      console.log(`🚀 >> 正在生成第 ${index + 1}/3 张...`);
+      console.log(`🛡️ >> 正在生成第 ${index + 1}/3 张 (2k模式)...`);
       const imgUrl = await callDoubaoImageAPI(basePrompt + `\n(${v})`, processedBase64);
       if (imgUrl) validImages.push(imgUrl);
     } catch (e) {
-      console.error(`第 ${index + 1} 张生成失败`, e);
+      console.error(`第 ${index + 1} 张生成遇到严重错误`, e);
     }
   }
 
