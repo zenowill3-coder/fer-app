@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/doubao/:match*",
+      "destination": "https://ark.cn-beijing.volces.com/api/:match*"
+    }
+  ]
+}
