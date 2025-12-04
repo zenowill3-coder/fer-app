@@ -41,18 +41,14 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       { key: 'color', label: '色彩' },
   ];
 
-  // 🛠️ 核心修复：通过 Vercel 代理下载图片
+  // 🛠️ 核心修复：通过 Vercel 代理下载图片，解决 PDF 导出空白
   const convertImageToBase64 = async (originalUrl: string): Promise<string> => {
-    // 1. 判断是否是豆包图片
     const doubaoDomain = "ark-content-generation-v2-cn-beijing.tos-cn-beijing.volces.com";
     let fetchUrl = originalUrl;
 
+    // 如果是豆包图片，走 /proxy-image 代理
     if (originalUrl.includes(doubaoDomain)) {
-        // 替换为我们的代理路径
-        // 原始: https://ark...com/path/to/image.jpg?params
-        // 代理: /proxy-image/path/to/image.jpg?params
         fetchUrl = originalUrl.replace(`https://${doubaoDomain}`, '/proxy-image');
-        // console.log("Proxying image:", fetchUrl);
     }
 
     try {
@@ -74,7 +70,6 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
     if (!contentRef.current) return;
     setExporting(true);
     
-    // 保存原始图片 src
     const imgElements = contentRef.current.querySelectorAll('img');
     const originalSrcs = Array.from(imgElements).map(img => img.src);
 
@@ -82,10 +77,8 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         // 1. 预处理：将所有图片替换为 Base64
         const promises = Array.from(imgElements).map(async (img) => {
             if (img.src.startsWith('data:')) return;
-            
             try {
                 const base64 = await convertImageToBase64(img.src);
-                // 只有成功转为 Base64 才替换，否则保留原链接避免破图
                 if (base64.startsWith('data:')) {
                     img.src = base64;
                 }
@@ -95,8 +88,6 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         });
 
         await Promise.all(promises);
-        
-        // 等待渲染刷新
         await new Promise(r => setTimeout(r, 500));
 
         const canvas = await html2canvas(contentRef.current, { 
@@ -132,7 +123,6 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         console.error("PDF Export Error", e);
         alert("导出 PDF 失败，请尝试截图保存。");
     } finally {
-        // 恢复原始图片链接
         Array.from(imgElements).forEach((img, index) => {
             img.src = originalSrcs[index];
         });
@@ -182,6 +172,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                                 <span className="block text-slate-400 mb-1">出行频率</span>
                                 <span className="font-medium text-base">{session.persona.travelFrequency}</span>
                             </div>
+                            {/* ⚠️ 关键修改：已彻底删除"自动驾驶认知"和"接受度"的展示代码，防止报错 */}
                         </div>
                         <div className="pt-2">
                              <span className="block text-slate-400 text-sm mb-2">深层需求</span>
