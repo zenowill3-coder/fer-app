@@ -270,4 +270,36 @@ const Round3: React.FC<Round3Props> = ({ session, onNext }) => {
 
       {/* Zoom Modal */}
       {isZoomed && (
-          <div className="fixed inset-0 z-50 bg-black
+          <div className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setIsZoomed(null)}>
+              <img src={isZoomed} alt="Zoomed" className="max-w-full max-h-full rounded shadow-2xl" />
+              <button className="absolute top-6 right-6 text-white/70 hover:text-white bg-white/10 p-2 rounded-full transition-colors">
+                  <X size={24} />
+              </button>
+          </div>
+      )}
+
+      {/* Footer */}
+      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white/90 backdrop-blur-md border-t border-slate-200 flex justify-center z-40">
+        <button
+          onClick={() => onNext({ 
+              styleDescription, 
+              styleImageBase64: styleImage, 
+              generatedImages, 
+              selectedImageIndex, 
+              evaluation 
+          })}
+          disabled={!canFinish}
+          className={`flex items-center gap-2 px-12 py-3 rounded-full text-lg font-bold shadow-lg transition-all ${
+            canFinish
+            ? 'bg-gradient-to-r from-teal-600 to-emerald-600 text-white hover:shadow-xl hover:-translate-y-1' 
+            : 'bg-slate-300 text-slate-500 cursor-not-allowed'
+          }`}
+        >
+          完成并生成报告 <ArrowRight size={20} />
+        </button>
+      </div>
+    </div>
+  );
+};
+
+export default Round3;
