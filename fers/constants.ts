@@ -1,4 +1,3 @@
-
 export const EMOTIONAL_NEEDS = ['兴奋', '欣喜', '快乐', '满足', '安心', '放松', '信任'];
 export const SOCIAL_NEEDS = ['身份认同', '个性表达', '群体归属', '社会尊重', '自信', '天然无修饰', '手工匠心'];
 
@@ -14,7 +13,6 @@ export interface R2Category {
   keywords: R2Keyword[];
 }
 
-// Updated Family Structure Options mapping to age groups
 export const FAMILY_STRUCTURE_OPTIONS = [
   { label: '未婚人群（大致年龄20-30）', ageGroup: '20-30', structure: '未婚人群' },
   { label: '年轻小家庭2+1儿童（大致年龄30-40）', ageGroup: '30-40', structure: '年轻小家庭(2+1)' },
@@ -28,17 +26,15 @@ export const TRAVEL_FREQUENCY_OPTIONS = [
   '高（几乎每天都有出行）'
 ];
 
-export const AD_KNOWLEDGE_OPTIONS = [
-  '了解较少',
-  '一般了解',
-  '非常了解'
-];
+// 界面文案配置
+export const UI_TEXT = {
+  personaTitle: "为了更精准地生成“未来感”体验，请先定义目标用户的基本属性与深层需求。",
+  emotionalNeedsLabel: "在“未来感”SUV中，你希望获得哪些情绪体验？（多选）",
+  socialNeedsLabel: "在“未来感”SUV中，在社会意义方面，你希望带来怎样的价值？"
+};
 
-export const AD_ACCEPTANCE_OPTIONS = [
-  '愿意乘坐并尝试',
-  '暂时持观望态度，还需要进一步了解',
-  '目前不愿意接受'
-];
+// 兜底图片
+export const FALLBACK_IMAGE = "https://images.unsplash.com/photo-1549399542-7e3f8b79c341?auto=format&fit=crop&w=1600&q=80";
 
 export const R2_CATEGORIES: R2Category[] = [
   {
