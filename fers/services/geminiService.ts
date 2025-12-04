@@ -59,7 +59,7 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (Seedream 4.0 适配版)
+// 3. 核心工具 B: 生图 (Seedream 4.0 + 1280x720)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
   const url = "/api/doubao/v3/images/generations";
@@ -75,7 +75,7 @@ async function callDoubaoImageAPI(prompt: string, compressedBase64: string | nul
 
   if (compressedBase64) {
     requestBody.image = compressedBase64;
-    requestBody.strength = 0.65; 
+    requestBody.strength = 0.7; 
   }
 
   try {
@@ -100,10 +100,9 @@ function cleanJsonResult(text: string): string {
 }
 
 // ============================================================
-// 4. 业务功能 Round 1 & 2
+// 4. 业务功能 Round 1 & 2 (⚡️ 文案极简优化 ⚡️)
 // ============================================================
 export const generateFunctionConfigs = async (persona: Persona, selectedKeywords: string[]): Promise<GeneratedConfig[]> => {
-  // 移除了自动驾驶认知的 Prompt
   const prompt = `
     你是一位资深的未来汽车用户体验研究专家。
     基于以下用户画像和感性需求，生成 6 个最具创新性的功能配置。
@@ -111,7 +110,13 @@ export const generateFunctionConfigs = async (persona: Persona, selectedKeywords
     【核心情绪】${persona.emotionalNeeds.join(', ')}
     【社会价值】${persona.socialNeeds.join(', ')}
     【感性关键词】${selectedKeywords.join(', ')}
-    【要求】输出纯 JSON 数组，包含 id, title, description。
+    
+    【输出要求】
+    1. 生成 6 个配置。
+    2. 每个配置包含：
+       - 标题 (title): 4-6个字，充满科技感。
+       - 说明 (description): 极其精炼的一句话（严格限制在12字以内），采用“动词+名词”结构，直击核心价值，拒绝废话。
+    3. 输出纯 JSON 数组。
   `;
   try {
     const resultText = await callDoubaoTextAPI([{ role: "system", content: "你是一个只输出 JSON 数组的助手。" }, { role: "user", content: prompt }]);
@@ -127,7 +132,13 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
   const prompt = `
     你是一位资深的未来汽车交互设计专家。
     基于关键词: ${selectedKeywords.join(', ')}，生成 6 个交互体验配置。
-    【要求】输出纯 JSON 数组，包含 title 和 description。
+    
+    【输出要求】
+    1. 生成 6 个配置。
+    2. 每个配置包含：
+       - 标题 (title): 4-6个字，简洁有力。
+       - 说明 (description): 极其精炼的一句话（严格限制在12字以内），一语道破交互逻辑，不要解释性文字。
+    3. 输出纯 JSON 数组。
   `;
   try {
     const resultText = await callDoubaoTextAPI([{ role: "system", content: "你是一个只输出 JSON 数组的助手。" }, { role: "user", content: prompt }]);
@@ -138,7 +149,7 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
 };
 
 // ============================================================
-// 5. 业务功能 Round 3 (6张图 + 完整 Prompt 继承)
+// 5. 业务功能 Round 3
 // ============================================================
 export const generateInteriorConcepts = async (
   persona: Persona, 
@@ -148,11 +159,9 @@ export const generateInteriorConcepts = async (
   styleImageBase64: string | null
 ): Promise<string[]> => {
   
-  // 1. 继承前两轮数据
   const r1Selected = r1Data.generatedConfigs.filter(c => r1Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   const r2Selected = r2Data.generatedConfigs.filter(c => r2Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   
-  // 2. 忠实翻译的中文 Prompt
   const basePrompt = `
     设计一款未来感SUV汽车内饰（概念艺术）。
     
@@ -181,7 +190,6 @@ export const generateInteriorConcepts = async (
     } catch (e) { processedBase64 = null; }
   }
 
-  // 3. 定义 6 种差异化变体
   const variations = [
       "变体1 (温暖居家): 强调柔软织物材质，暖色调氛围灯，像客厅一样的松弛感",
       "变体2 (极简科技): 强调冷白与银灰色调，透明显示屏，无形科技感",
@@ -193,7 +201,6 @@ export const generateInteriorConcepts = async (
 
   const validImages: string[] = [];
   
-  // 4. 分批生成 (Batch Processing) - 防止 502
   const batchSize = 3;
   for (let i = 0; i < variations.length; i += batchSize) {
       const batch = variations.slice(i, i + batchSize);
@@ -206,13 +213,11 @@ export const generateInteriorConcepts = async (
           if (url) validImages.push(url);
       });
 
-      // 强制休息 1 秒
       if (i + batchSize < variations.length) {
           await new Promise(resolve => setTimeout(resolve, 1000));
       }
   }
 
-  // 兜底补齐到 6 张
   const placeholders = [
     "https://picsum.photos/1280/720?random=1",
     "https://picsum.photos/1280/720?random=2",
