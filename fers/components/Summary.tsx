@@ -41,24 +41,16 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       { key: 'color', label: '色彩' },
   ];
 
-  // 🛠️ 核心修复：将豆包图片 URL 转换为 Vercel 代理 URL
+  // 图片转 Base64 (维持原有的修复逻辑)
   const convertImageToBase64 = async (originalUrl: string): Promise<string> => {
-    // 报错日志里出现的那个长域名
     const doubaoDomain = "ark-content-generation-v2-cn-beijing.tos-cn-beijing.volces.com";
     let fetchUrl = originalUrl;
-
-    // 如果图片来自豆包，强行替换为 /proxy-image/ 开头的路径
     if (originalUrl.includes(doubaoDomain)) {
-        // 逻辑：把 "https://域名" 替换为 "/proxy-image"
-        // 结果例：/proxy-image/doubao-seedream-4-0/xxx.jpg?signature=...
         fetchUrl = originalUrl.replace(`https://${doubaoDomain}`, '/proxy-image');
     }
-
     try {
-      // 请求自己的服务器 (Vercel)，这就不会有 CORS 问题了
       const response = await fetch(fetchUrl); 
-      if (!response.ok) throw new Error(`Proxy fetch failed: ${response.status}`);
-      
+      if (!response.ok) throw new Error("Network response was not ok");
       const blob = await response.blob();
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -66,8 +58,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         reader.readAsDataURL(blob);
       });
     } catch (e) {
-      console.warn("图片转 Base64 失败，PDF 中可能无法显示该图:", e);
-      // 如果转换失败，返回原链接，网页上至少能看，但 PDF 里会是白的
+      console.warn("Image fetch failed", e);
       return originalUrl;
     }
   };
@@ -76,78 +67,54 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
     if (!contentRef.current) return;
     setExporting(true);
     
-    // 1. 抓取所有图片元素
     const imgElements = contentRef.current.querySelectorAll('img');
-    const originalSrcs: string[] = []; // 用于稍后恢复
+    const originalSrcs = Array.from(imgElements).map(img => img.src);
 
     try {
-        // 2. 逐个将图片替换为 Base64
-        const promises = Array.from(imgElements).map(async (img, index) => {
-            originalSrcs[index] = img.src; // 备份原地址
-            
-            // 如果已经是 Base64 (比如本地上传的参考图)，跳过
+        // 1. 图片预处理 (Base64)
+        const promises = Array.from(imgElements).map(async (img) => {
             if (img.src.startsWith('data:')) return;
-            
             try {
-                // 尝试转换
                 const base64 = await convertImageToBase64(img.src);
-                // 只有成功拿到 data: 开头的数据才替换
-                if (base64.startsWith('data:')) {
-                    img.src = base64;
-                }
-            } catch (error) {
-                console.error("Image convert error", error);
-            }
+                if (base64.startsWith('data:')) img.src = base64;
+            } catch (error) { console.error(error); }
         });
-
-        // 等待所有图片处理完毕
         await Promise.all(promises);
-        
-        // 给一点缓冲时间让 DOM 更新
         await new Promise(r => setTimeout(r, 800));
 
-        // 3. 开始截图
+        // 2. 生成高清 Canvas
         const canvas = await html2canvas(contentRef.current, { 
             scale: 2, 
-            useCORS: true, // 配合 Base64 使用
+            useCORS: true, 
             allowTaint: true 
         });
         
-        // 4. 生成 PDF
-        const imgData = canvas.toDataURL('image/jpeg', 0.95);
-        const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfWidth = pdf.internal.pageSize.getWidth();
-        const pdfHeight = pdf.internal.pageSize.getHeight();
-        const imgWidth = canvas.width;
-        const imgHeight = canvas.height;
-        const scaleFactor = pdfWidth / imgWidth;
+        // 3. 智能计算 PDF 尺寸 (核心修改)
+        // 我们不再强制用 A4 纸的高度切分，而是根据内容高度自定义 PDF 长度
+        const contentWidth = canvas.width;
+        const contentHeight = canvas.height;
         
-        let heightLeft = imgHeight;
-        let position = 0;
+        // A4 纸宽度 (mm)
+        const pdfWidth = 210; 
+        // 根据比例计算需要的 PDF 高度 (mm)
+        const pdfHeight = (contentHeight * pdfWidth) / contentWidth;
 
-        // 第一页
-        pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, imgHeight * scaleFactor);
-        heightLeft -= (pdfHeight / scaleFactor);
-
-        // 分页逻辑
-        while (heightLeft > 0) {
-            position = heightLeft - imgHeight;
-            pdf.addPage();
-            pdf.addImage(imgData, 'JPEG', 0, -(pdfHeight - heightLeft * scaleFactor), pdfWidth, imgHeight * scaleFactor);
-            heightLeft -= (pdfHeight / scaleFactor);
-        }
+        // 创建自定义尺寸的 PDF (宽 210mm，高自动适应)
+        const pdf = new jsPDF('p', 'mm', [pdfWidth, pdfHeight]);
+        
+        const imgData = canvas.toDataURL('image/jpeg', 0.95);
+        
+        // 直接把整张长图放进去，不分页，不切割
+        pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, pdfHeight);
         
         pdf.save(`FERS_Report_${session.id.slice(-6)}.pdf`);
 
     } catch (e) {
         console.error("PDF Export Error", e);
-        alert("导出 PDF 遇到问题，建议直接使用浏览器的打印功能 (Ctrl+P / Cmd+P) 另存为 PDF。");
+        alert("导出 PDF 失败，请尝试截图保存。");
     } finally {
-        // 5. 无论成功失败，都要把图片链接恢复回去，否则网页上图片会失效
         Array.from(imgElements).forEach((img, index) => {
-            if (originalSrcs[index]) {
-                img.src = originalSrcs[index];
-            }
+            if (originalSrcs[index]) img.src = originalSrcs[index];
         });
         setExporting(false);
     }
@@ -171,7 +138,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       ) : (
         <>
             <div ref={contentRef} className="bg-white p-10 shadow-lg rounded-none md:rounded-2xl space-y-8 text-slate-800">
-                {/* 报告头部 */}
+                {/* Header */}
                 <div className="border-b-2 border-slate-900 pb-6 mb-8">
                     <h2 className="text-4xl font-extrabold text-slate-900 mb-2">未来体验研究报告</h2>
                     <div className="flex justify-between text-slate-500 text-sm mt-4">
@@ -222,35 +189,32 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                 {/* 03 最终方案 */}
                 <section>
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">03 最终概念方案与评价</h3>
-                    <div className="rounded-xl overflow-hidden border-2 border-slate-100 shadow-lg">
+                    <div className="rounded-xl overflow-hidden border-2 border-slate-100 shadow-lg mb-6">
                         {finalImage ? (
                             <img 
                                 src={finalImage} 
                                 alt="Final Concept" 
                                 className="w-full h-auto" 
-                                // ⚠️ 注意：这里不加 crossOrigin，因为我们会在导出时手动替换 URL
                             />
                         ) : (
                             <div className="w-full h-64 bg-slate-100 flex items-center justify-center text-slate-400">暂无图片</div>
                         )}
                     </div>
-                    {/* 评价内容 */}
-                    <div className="mt-6 space-y-4">
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
-                            {evaluationCategories.map(cat => (
-                                <div key={cat.key}>
-                                    <h5 className="font-semibold text-sm text-slate-600 mb-2">{cat.label}</h5>
-                                    <div className="space-y-2">
-                                        <p className="text-sm bg-green-50 text-green-800 p-3 rounded-lg border border-green-100 whitespace-pre-wrap">
-                                            <span className="font-bold">喜欢:</span> {e[cat.key].liked || '未填写'}
-                                        </p>
-                                        <p className="text-sm bg-red-50 text-red-800 p-3 rounded-lg border border-red-100 whitespace-pre-wrap">
-                                            <span className="font-bold">不喜欢:</span> {e[cat.key].disliked || '未填写'}
-                                        </p>
-                                    </div>
+                    {/* 评价内容放在图片下方，避免被切割 */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
+                        {evaluationCategories.map(cat => (
+                            <div key={cat.key}>
+                                <h5 className="font-semibold text-sm text-slate-600 mb-2">{cat.label}</h5>
+                                <div className="space-y-2">
+                                    <p className="text-sm bg-green-50 text-green-800 p-3 rounded-lg border border-green-100 whitespace-pre-wrap">
+                                        <span className="font-bold">喜欢:</span> {e[cat.key].liked || '未填写'}
+                                    </p>
+                                    <p className="text-sm bg-red-50 text-red-800 p-3 rounded-lg border border-red-100 whitespace-pre-wrap">
+                                        <span className="font-bold">不喜欢:</span> {e[cat.key].disliked || '未填写'}
+                                    </p>
                                 </div>
-                            ))}
-                        </div>
+                            </div>
+                        ))}
                     </div>
                 </section>
 
