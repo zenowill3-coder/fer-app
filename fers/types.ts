@@ -1,12 +1,11 @@
-
 export type Step = 'dashboard' | 'setup' | 'round1' | 'round2' | 'round3' | 'summary' | 'completion';
 
 export interface Persona {
   ageGroup: string;
   familyStructure: string;
-  travelFrequency: string; // New field
-  adKnowledge: string;
-  adAcceptance: string; // New field
+  travelFrequency: string; 
+  // 已移除: adKnowledge
+  // 已移除: adAcceptance
   emotionalNeeds: string[];
   socialNeeds: string[];
 }
@@ -68,8 +67,6 @@ export const INITIAL_PERSONA: Persona = {
   ageGroup: '',
   familyStructure: '',
   travelFrequency: '',
-  adKnowledge: '',
-  adAcceptance: '',
   emotionalNeeds: [],
   socialNeeds: []
 };
