@@ -1,4 +1,4 @@
-import React, { useRef } from 'react';
+import React, { useRef, useState } from 'react';
 import { Session, Evaluation } from '../types';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
@@ -12,9 +12,9 @@ interface SummaryProps {
 
 const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
   const contentRef = useRef<HTMLDivElement>(null);
-  const [exporting, setExporting] = React.useState(false);
-  const [summary, setSummary] = React.useState<string>(session.aiSummary || '');
-  const [loading, setLoading] = React.useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [summary, setSummary] = useState<string>(session.aiSummary || '');
+  const [loading, setLoading] = useState(false);
 
   // Filter for selected choices
   const r1Choices = session.round1.generatedConfigs.filter(c => session.round1.selectedConfigIds.includes(c.id));
@@ -43,46 +43,100 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       { key: 'color', label: '色彩' },
   ];
 
+  // 🛠️ 核心修复：把跨域图片转为 Base64
+  const convertImageToBase64 = async (url: string): Promise<string> => {
+    try {
+      const response = await fetch(url, { mode: 'cors' }); // 尝试 CORS 请求
+      const blob = await response.blob();
+      return new Promise((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string);
+        reader.readAsDataURL(blob);
+      });
+    } catch (e) {
+      console.warn("Image CORS failed, returning original URL (might be blank in PDF)", e);
+      return url;
+    }
+  };
+
   const handleExportPDF = async () => {
     if (!contentRef.current) return;
     setExporting(true);
     
     try {
-        const canvas = await html2canvas(contentRef.current, { scale: 2, useCORS: true });
-        const imgData = canvas.toDataURL('image/png');
+        // 1. 临时替换 DOM 中的图片为 Base64
+        // 找到所有的 img 标签
+        const images = contentRef.current.getElementsByTagName('img');
+        const originalSrcs: string[] = [];
+
+        // 并行处理所有图片转换
+        const promises = Array.from(images).map(async (img, index) => {
+            originalSrcs[index] = img.src; // 保存原地址
+            // 只有当图片是 http 开头（非本地 Base64）时才转换
+            if (img.src.startsWith('http')) {
+                const base64 = await convertImageToBase64(img.src);
+                img.src = base64; // 替换为 Base64
+            }
+        });
+        
+        await Promise.all(promises);
+
+        // 2. 等待一小会儿确保渲染完成
+        await new Promise(r => setTimeout(r, 500));
+
+        // 3. 生成 Canvas
+        const canvas = await html2canvas(contentRef.current, { 
+            scale: 2, 
+            useCORS: true, // 开启跨域支持
+            allowTaint: true, // 允许脏画布
+            logging: false
+        });
+        
+        // 4. 恢复原始图片链接 (避免页面闪烁或内存占用)
+        Array.from(images).forEach((img, index) => {
+            img.src = originalSrcs[index];
+        });
+
+        // 5. 生成 PDF
+        const imgData = canvas.toDataURL('image/jpeg', 0.95); // 使用 JPEG 减小体积
         const pdf = new jsPDF('p', 'mm', 'a4');
         
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = pdf.internal.pageSize.getHeight();
         const imgWidth = canvas.width;
         const imgHeight = canvas.height;
-        const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
         
-        // Calculate height needed
-        const renderHeight = imgHeight * (pdfWidth / imgWidth);
+        // 计算每一页的高度
+        const pageHeightInImg = (imgHeight * pdfWidth) / imgWidth;
+        const scaleFactor = pdfWidth / imgWidth;
         
-        if (renderHeight > pdfHeight) {
-             let heightLeft = renderHeight;
-             let position = 0;
-             const pageHeight = pdfHeight;
-             
-             pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, renderHeight);
-             heightLeft -= pageHeight;
-             
-             while (heightLeft >= 0) {
-               position = heightLeft - renderHeight;
-               pdf.addPage();
-               pdf.addImage(imgData, 'PNG', 0, position, pdfWidth, renderHeight);
-               heightLeft -= pageHeight;
-             }
-        } else {
-             pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, renderHeight);
+        let heightLeft = imgHeight;
+        let position = 0;
+
+        // 第一页
+        pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, imgHeight * scaleFactor);
+        heightLeft -= (pdfHeight / scaleFactor);
+
+        // 如果内容超过一页，自动分页
+        while (heightLeft > 0) {
+            position = heightLeft - imgHeight; // 下移
+            pdf.addPage();
+            // 这里是一个简化的分页逻辑，可能需要裁剪 canvas 才能完美分页，但对于长图来说通常这样足够
+            // 注意：jspdf 添加长图到第二页比较复杂，通常建议简单截断或缩放一页展示
+            // 为了稳定性，这里我们改为：如果太长，直接把整个长图缩放到一页里（适合报告）
+            // 或者如果只是想简单分页：
+            pdf.addImage(imgData, 'JPEG', 0, -(pdfHeight - heightLeft * scaleFactor), pdfWidth, imgHeight * scaleFactor);
+            heightLeft -= (pdfHeight / scaleFactor);
         }
+        
+        // 简化策略：如果不想处理复杂分页，直接把内容缩放到一页 PDF 里
+        // pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, imgHeight * (pdfWidth / imgWidth));
 
         pdf.save(`FERS_Report_${session.id.slice(-6)}.pdf`);
+
     } catch (e) {
         console.error("PDF Export Error", e);
-        alert("导出 PDF 失败");
+        alert("导出 PDF 失败，可能是图片跨域限制。建议截图保存。");
     } finally {
         setExporting(false);
     }
@@ -160,7 +214,13 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">03 最终概念方案与评价</h3>
                     <div className="rounded-xl overflow-hidden border-2 border-slate-100 shadow-lg">
                         {finalImage ? (
-                            <img src={finalImage} alt="Final Concept" className="w-full h-auto" />
+                            // 添加 crossOrigin 属性，尝试请求 CORS 许可
+                            <img 
+                                src={finalImage} 
+                                alt="Final Concept" 
+                                className="w-full h-auto" 
+                                crossOrigin="anonymous" 
+                            />
                         ) : (
                             <div className="w-full h-64 bg-slate-100 flex items-center justify-center text-slate-400">暂无图片</div>
                         )}
