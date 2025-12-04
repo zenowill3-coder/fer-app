@@ -1,15 +1,14 @@
-
 import React, { useState } from 'react';
 import { Persona, INITIAL_PERSONA } from '../types';
+// 修正导入：只导入存在的常量，并引入 UI_TEXT
 import { 
   FAMILY_STRUCTURE_OPTIONS, 
   TRAVEL_FREQUENCY_OPTIONS, 
-  AD_KNOWLEDGE_OPTIONS, 
-  AD_ACCEPTANCE_OPTIONS,
   EMOTIONAL_NEEDS, 
-  SOCIAL_NEEDS 
+  SOCIAL_NEEDS,
+  UI_TEXT 
 } from '../constants';
-import { User, Users, Brain, Heart, Star, ArrowRight, Car, Activity, ThumbsUp } from 'lucide-react';
+import { User, Users, Heart, Star, ArrowRight, Car, Activity } from 'lucide-react';
 
 interface SetupStepProps {
   initialPersona: Persona;
@@ -17,33 +16,40 @@ interface SetupStepProps {
 }
 
 const SetupStep: React.FC<SetupStepProps> = ({ initialPersona, onNext }) => {
-  const [persona, setPersona] = useState<Persona>(initialPersona.ageGroup ? initialPersona : INITIAL_PERSONA);
+  // 使用传入的初始状态或默认空状态
+  const [persona, setPersona] = useState<Persona>(
+    initialPersona.ageGroup ? initialPersona : INITIAL_PERSONA
+  );
 
   const toggleSelection = (list: string[], item: string) => {
-    return list.includes(item) ? list.filter(i => i !== item) : [...list, item];
+    // 确保 list 存在，防止 undefined 报错
+    const currentList = list || [];
+    return currentList.includes(item) 
+      ? currentList.filter(i => i !== item) 
+      : [...currentList, item];
   };
 
   const handleFamilySelect = (option: typeof FAMILY_STRUCTURE_OPTIONS[0]) => {
     setPersona({
       ...persona,
-      familyStructure: option.label, // Store the full label for display
-      ageGroup: option.ageGroup // Store age group for logic if needed
+      familyStructure: option.label,
+      ageGroup: option.ageGroup
     });
   };
 
+  // 校验逻辑更新：不再检查自动驾驶相关字段
   const isValid = 
     persona.familyStructure && 
     persona.travelFrequency &&
-    persona.adKnowledge && 
-    persona.adAcceptance &&
-    persona.emotionalNeeds.length > 0 && 
-    persona.socialNeeds.length > 0;
+    (persona.emotionalNeeds?.length || 0) > 0 && 
+    (persona.socialNeeds?.length || 0) > 0;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-8 animate-fade-in">
+    <div className="max-w-3xl mx-auto space-y-8 animate-fade-in pb-20">
       <div className="text-center space-y-2 mb-10">
         <h1 className="text-3xl font-bold text-slate-900">建立用户画像</h1>
-        <p className="text-slate-500">为了更精准地生成未来体验，请先定义目标用户的基本属性与深层需求。</p>
+        {/* 使用 constants.ts 中的新文案 */}
+        <p className="text-slate-500">{UI_TEXT.personaTitle}</p>
       </div>
 
       {/* Basic Info Section */}
@@ -100,51 +106,6 @@ const SetupStep: React.FC<SetupStepProps> = ({ initialPersona, onNext }) => {
               ))}
            </div>
         </div>
-
-        {/* 3. AD Knowledge */}
-        <div className="space-y-3">
-           <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
-             <Brain size={16} className="text-slate-400"/> 三、自动驾驶了解程度
-           </label>
-           <div className="grid grid-cols-3 gap-3">
-              {AD_KNOWLEDGE_OPTIONS.map(opt => (
-                <button
-                  key={opt}
-                  onClick={() => setPersona({ ...persona, adKnowledge: opt })}
-                  className={`py-2 px-3 text-sm rounded-lg border transition-all ${
-                    persona.adKnowledge === opt
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300'
-                  }`}
-                >
-                  {opt}
-                </button>
-              ))}
-           </div>
-        </div>
-
-        {/* 4. AD Acceptance */}
-        <div className="space-y-3">
-           <label className="text-sm font-medium text-slate-700 flex items-center gap-2">
-             <ThumbsUp size={16} className="text-slate-400"/> 四、自动驾驶接受程度
-           </label>
-           <div className="grid grid-cols-1 gap-2">
-              {AD_ACCEPTANCE_OPTIONS.map(opt => (
-                <button
-                  key={opt}
-                  onClick={() => setPersona({ ...persona, adAcceptance: opt })}
-                  className={`py-3 px-4 text-sm rounded-lg border transition-all text-left flex items-center justify-between ${
-                    persona.adAcceptance === opt
-                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-md'
-                      : 'bg-white text-slate-600 border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
-                  }`}
-                >
-                  <span>{opt}</span>
-                  {persona.adAcceptance === opt && <CheckIcon />}
-                </button>
-              ))}
-           </div>
-        </div>
       </section>
 
       {/* Needs Section */}
@@ -155,15 +116,18 @@ const SetupStep: React.FC<SetupStepProps> = ({ initialPersona, onNext }) => {
         </h2>
 
         <div className="space-y-4">
+           {/* 3. Emotional Needs */}
            <div>
-             <label className="text-sm font-medium text-slate-700 mb-3 block">情绪体验 (多选)</label>
+             <label className="text-sm font-medium text-slate-700 mb-3 block">
+               {UI_TEXT.emotionalNeedsLabel}
+             </label>
              <div className="flex flex-wrap gap-2">
                 {EMOTIONAL_NEEDS.map(opt => (
                   <button
                     key={opt}
                     onClick={() => setPersona({ ...persona, emotionalNeeds: toggleSelection(persona.emotionalNeeds, opt) })}
                     className={`py-1.5 px-4 text-sm rounded-full border transition-all ${
-                      persona.emotionalNeeds.includes(opt)
+                      persona.emotionalNeeds?.includes(opt)
                         ? 'bg-pink-50 text-pink-700 border-pink-200 font-medium'
                         : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
@@ -174,9 +138,10 @@ const SetupStep: React.FC<SetupStepProps> = ({ initialPersona, onNext }) => {
              </div>
            </div>
 
+           {/* 4. Social Needs */}
            <div className="border-t border-slate-100 pt-4">
              <label className="text-sm font-medium text-slate-700 mb-3 block flex items-center gap-1">
-                <Star size={14} className="text-amber-500"/> 社会意涵 (多选)
+                <Star size={14} className="text-amber-500"/> {UI_TEXT.socialNeedsLabel}
              </label>
              <div className="flex flex-wrap gap-2">
                 {SOCIAL_NEEDS.map(opt => (
@@ -184,7 +149,7 @@ const SetupStep: React.FC<SetupStepProps> = ({ initialPersona, onNext }) => {
                     key={opt}
                     onClick={() => setPersona({ ...persona, socialNeeds: toggleSelection(persona.socialNeeds, opt) })}
                     className={`py-1.5 px-4 text-sm rounded-full border transition-all ${
-                      persona.socialNeeds.includes(opt)
+                      persona.socialNeeds?.includes(opt)
                         ? 'bg-amber-50 text-amber-700 border-amber-200 font-medium'
                         : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
                     }`}
