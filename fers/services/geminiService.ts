@@ -59,21 +59,31 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (分辨率修复)
+// 3. 核心工具 B: 生图 (双保险重试机制)
 // ============================================================
-async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
+async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null, retryMode = false) {
   const url = "/api/doubao/v3/images/generations";
   if (!IMAGE_MODEL_ID) throw new Error("生图模型ID未配置");
 
-  const requestBody: any = {
+  // 🛡️ 策略 1 (默认): 尝试 1280x720 HD 分辨率
+  // 去掉 sequential_image_generation，因为我们是单次调用
+  let requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
-    // 🛠️ 【关键修复】: 
-    // 之前的 width/height 分离写法被忽略了。
-    // 改为 size 字符串格式 "1280*720" (宽*高)，这是兼容性最强的写法。
-    size: "1280*720", 
-    sequential_image_generation: "auto"
+    width: 1280,
+    height: 720
   };
+
+  // 🛡️ 策略 2 (重试模式): 如果失败，降级为最稳的 1024*1024
+  if (retryMode) {
+    console.warn("⚠️ 启用降级重试模式 (1024*1024)...");
+    requestBody = {
+      model: IMAGE_MODEL_ID,
+      prompt: prompt,
+      width: 1024,
+      height: 1024
+    };
+  }
 
   if (compressedBase64) {
     requestBody.image = compressedBase64;
@@ -87,7 +97,15 @@ async function callDoubaoImageAPI(prompt: string, compressedBase64: string | nul
       body: JSON.stringify(requestBody)
     });
 
-    if (!response.ok) return null;
+    if (!response.ok) {
+        // 如果是第一次失败，且不是因为网关错误(502)，尝试降级重试
+        if (!retryMode && response.status === 400) {
+            return await callDoubaoImageAPI(prompt, compressedBase64, true);
+        }
+        const err = await response.text();
+        console.error("豆包API拒绝:", err);
+        return null;
+    }
     const data = await response.json();
     return data.data?.[0]?.url || null;
 
@@ -112,7 +130,6 @@ export const generateFunctionConfigs = async (persona: Persona, selectedKeywords
     【核心情绪】${persona.emotionalNeeds.join(', ')}
     【社会价值】${persona.socialNeeds.join(', ')}
     【感性关键词】${selectedKeywords.join(', ')}
-    
     【输出要求】
     1. 生成 6 个配置。
     2. 每个配置包含：
@@ -134,7 +151,6 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
   const prompt = `
     你是一位资深的未来汽车交互设计专家。
     基于关键词: ${selectedKeywords.join(', ')}，生成 6 个交互体验配置。
-    
     【输出要求】
     1. 生成 6 个配置。
     2. 每个配置包含：
@@ -183,7 +199,7 @@ export const generateInteriorConcepts = async (
     4. 画质：8k分辨率，OC渲染，电影级光效。
   `;
 
-  console.log("🚀 [16:9 分辨率修复] 启动...");
+  console.log("🚀 [双保险修复版] 启动...");
   
   let processedBase64: string | null = null;
   if (styleImageBase64) {
