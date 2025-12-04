@@ -1,9 +1,9 @@
-
 import React, { useState } from 'react';
 import { Session, GeneratedConfig } from '../types';
-import { R1_KEYWORDS } from '../constants';
+// 确保 R1_KEYWORDS 在 constants.ts 里还存在，如果不存在请告诉我
+import { R1_KEYWORDS } from '../constants'; 
 import { generateFunctionConfigs } from '../services/geminiService';
-import { Sparkles, CheckCircle2, ArrowRight, Loader2, Square } from 'lucide-react';
+import { Sparkles, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
 
 interface Round1Props {
   session: Session;
@@ -28,8 +28,12 @@ const Round1: React.FC<Round1Props> = ({ session, onNext }) => {
   const handleGenerate = async () => {
     if (selectedKeywords.length === 0) return;
     setLoading(true);
-    setGeneratedConfigs([]); // Clear previous
+    setGeneratedConfigs([]); 
+    
+    // 这里调用 Service 生成配置
+    // 注意：geminiService.ts 里我们已经去掉了对"自动驾驶认知"字段的依赖，所以这里可以直接传 session.persona
     const configs = await generateFunctionConfigs(session.persona, selectedKeywords);
+    
     setGeneratedConfigs(configs);
     setLoading(false);
   };
@@ -52,7 +56,8 @@ const Round1: React.FC<Round1Props> = ({ session, onNext }) => {
             选择功能感性词
         </h3>
         <div className="flex flex-wrap gap-3">
-            {R1_KEYWORDS.map(kw => (
+            {/* 确保 R1_KEYWORDS 存在 */}
+            {(R1_KEYWORDS || []).map(kw => (
                 <button
                     key={kw}
                     onClick={() => toggleKeyword(kw)}
