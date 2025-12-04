@@ -59,35 +59,27 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (双保险重试机制)
+// 3. 核心工具 B: 生图 (Seedream 4.0 + 1280x720)
 // ============================================================
-async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null, retryMode = false) {
+async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
   const url = "/api/doubao/v3/images/generations";
   if (!IMAGE_MODEL_ID) throw new Error("生图模型ID未配置");
 
-  // 🛡️ 策略 1 (默认): 尝试 1280x720 HD 分辨率
-  // 去掉 sequential_image_generation，因为我们是单次调用
-  let requestBody: any = {
+  const requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
+    // 16:9 高清分辨率
     width: 1280,
-    height: 720
+    height: 720,
+    sequential_image_generation: "auto"
   };
-
-  // 🛡️ 策略 2 (重试模式): 如果失败，降级为最稳的 1024*1024
-  if (retryMode) {
-    console.warn("⚠️ 启用降级重试模式 (1024*1024)...");
-    requestBody = {
-      model: IMAGE_MODEL_ID,
-      prompt: prompt,
-      width: 1024,
-      height: 1024
-    };
-  }
 
   if (compressedBase64) {
     requestBody.image = compressedBase64;
-    requestBody.strength = 0.65; 
+    // 🛠️ 【关键修改】: 将重绘幅度从 0.65 提升到 0.85
+    // 0.85 = 巨大的变化。AI 会大胆地打破原图结构，只保留色调和氛围。
+    // 这样能防止"生成的图和参考图太像"的问题。
+    requestBody.strength = 0.85; 
   }
 
   try {
@@ -97,15 +89,7 @@ async function callDoubaoImageAPI(prompt: string, compressedBase64: string | nul
       body: JSON.stringify(requestBody)
     });
 
-    if (!response.ok) {
-        // 如果是第一次失败，且不是因为网关错误(502)，尝试降级重试
-        if (!retryMode && response.status === 400) {
-            return await callDoubaoImageAPI(prompt, compressedBase64, true);
-        }
-        const err = await response.text();
-        console.error("豆包API拒绝:", err);
-        return null;
-    }
+    if (!response.ok) return null;
     const data = await response.json();
     return data.data?.[0]?.url || null;
 
@@ -120,7 +104,7 @@ function cleanJsonResult(text: string): string {
 }
 
 // ============================================================
-// 4. 业务功能 Round 1 & 2
+// 4. 业务功能 Round 1 & 2 (极简文案版)
 // ============================================================
 export const generateFunctionConfigs = async (persona: Persona, selectedKeywords: string[]): Promise<GeneratedConfig[]> => {
   const prompt = `
@@ -167,7 +151,7 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
 };
 
 // ============================================================
-// 5. 业务功能 Round 3
+// 5. 业务功能 Round 3 (重绘幅度调整版)
 // ============================================================
 export const generateInteriorConcepts = async (
   persona: Persona, 
@@ -180,15 +164,21 @@ export const generateInteriorConcepts = async (
   const r1Selected = r1Data.generatedConfigs.filter(c => r1Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   const r2Selected = r2Data.generatedConfigs.filter(c => r2Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   
+  // Prompt 微调：强调"仅参考色调"，防止模型误解为要参考结构
   const basePrompt = `
-    设计一款未来感SUV汽车内饰（概念艺术）。
+    设计一款2050年未来感SUV汽车内饰（概念艺术）。
     
-    【用户与需求 (Round 0)】
+    【核心指令】
+    - 忽略参考图中的现实车辆结构（如方向盘、旧式仪表）。
+    - 仅提取参考图的色彩氛围与材质质感，应用到全新的未来座舱中。
+    - 必须具备极强的科幻感与空间感。
+    
+    【用户与需求】
     - 目标家庭: ${persona.familyStructure}
     - 情绪体验: ${persona.emotionalNeeds.join(' ')}
-    - 风格描述: ${styleDesc} (如有参考图请提取其色调光影)
+    - 风格描述: ${styleDesc}
     
-    【核心配置 (Round 1 & 2)】
+    【核心配置】
     - 智能功能: ${r1Selected}
     - 交互形式: ${r2Selected}
     
@@ -199,7 +189,7 @@ export const generateInteriorConcepts = async (
     4. 画质：8k分辨率，OC渲染，电影级光效。
   `;
 
-  console.log("🚀 [双保险修复版] 启动...");
+  console.log("🚀 [高重绘幅度 0.85] 启动...");
   
   let processedBase64: string | null = null;
   if (styleImageBase64) {
