@@ -1,9 +1,9 @@
-
 import React, { useRef } from 'react';
 import { Session, Evaluation } from '../types';
 import html2canvas from 'html2canvas';
 import jsPDF from 'jspdf';
-import { Download, Loader2, Home } from 'lucide-react';
+import { Download, Loader2, Home, CheckCircle2, User } from 'lucide-react';
+import { generateSessionSummary } from '../services/geminiService';
 
 interface SummaryProps {
   session: Session;
@@ -13,13 +13,27 @@ interface SummaryProps {
 const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const [exporting, setExporting] = React.useState(false);
+  const [summary, setSummary] = React.useState<string>(session.aiSummary || '');
+  const [loading, setLoading] = React.useState(false);
 
   // Filter for selected choices
   const r1Choices = session.round1.generatedConfigs.filter(c => session.round1.selectedConfigIds.includes(c.id));
   const r2Choices = session.round2.generatedConfigs.filter(c => session.round2.selectedConfigIds.includes(c.id));
   
   const finalImage = session.round3.generatedImages[session.round3.selectedImageIndex || 0];
-  const isSummaryGenerating = session.status === 'completed' && !session.aiSummary;
+  
+  // 自动生成 AI 总结（如果还没有的话）
+  React.useEffect(() => {
+      if (session.status === 'completed' && !session.aiSummary && !summary && !loading) {
+          const fetchSummary = async () => {
+              setLoading(true);
+              const result = await generateSessionSummary(session);
+              setSummary(result);
+              setLoading(false);
+          };
+          fetchSummary();
+      }
+  }, [session, summary, loading]);
 
   const e = session.round3.evaluation;
   const evaluationCategories: { key: keyof Evaluation, label: string }[] = [
@@ -28,7 +42,6 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       { key: 'material', label: '材质触感' },
       { key: 'color', label: '色彩' },
   ];
-
 
   const handleExportPDF = async () => {
     if (!contentRef.current) return;
@@ -45,13 +58,9 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         const imgHeight = canvas.height;
         const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
         
-        const imgX = (pdfWidth - imgWidth * ratio) / 2;
-        const imgY = 0; // Top aligned
-        
         // Calculate height needed
         const renderHeight = imgHeight * (pdfWidth / imgWidth);
         
-        // Strategy: Scale to fit width, add pages if needed (simplified)
         if (renderHeight > pdfHeight) {
              let heightLeft = renderHeight;
              let position = 0;
@@ -70,7 +79,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
              pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, renderHeight);
         }
 
-        pdf.save(`FERS_Report_${session.id}.pdf`);
+        pdf.save(`FERS_Report_${session.id.slice(-6)}.pdf`);
     } catch (e) {
         console.error("PDF Export Error", e);
         alert("导出 PDF 失败");
@@ -80,7 +89,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 pb-20">
+    <div className="max-w-4xl mx-auto space-y-8 pb-20 animate-fade-in">
       <div className="flex justify-between items-center">
         <h1 className="text-3xl font-bold text-slate-900">Session Summary</h1>
         <button onClick={onDone} className="text-indigo-600 hover:underline flex items-center gap-1">
@@ -88,11 +97,11 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         </button>
       </div>
 
-      {isSummaryGenerating ? (
+      {loading ? (
           <div className="flex flex-col items-center justify-center py-20 bg-white rounded-2xl shadow-sm">
               <Loader2 className="w-12 h-12 text-indigo-600 animate-spin mb-4" />
               <p className="text-slate-600 text-lg">AI 正在生成研究总结报告...</p>
-              <p className="text-slate-400 text-sm mt-2">您可以稍后回来查看</p>
+              <p className="text-slate-400 text-sm mt-2">基于全流程数据智能分析</p>
           </div>
       ) : (
         <>
@@ -109,7 +118,10 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
 
                 {/* Persona */}
                 <section className="bg-slate-50 p-6 rounded-xl border border-slate-100">
-                    <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider">01 用户画像</h3>
+                    <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider flex items-center gap-2">
+                        <User size={20} className="text-indigo-600" />
+                        01 用户画像
+                    </h3>
                     <div className="space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
                             <div className="bg-white p-3 rounded-lg border border-slate-100">
@@ -119,14 +131,6 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                             <div className="bg-white p-3 rounded-lg border border-slate-100">
                                 <span className="block text-slate-400 mb-1">出行频率</span>
                                 <span className="font-medium text-base">{session.persona.travelFrequency}</span>
-                            </div>
-                            <div className="bg-white p-3 rounded-lg border border-slate-100">
-                                <span className="block text-slate-400 mb-1">自动驾驶认知</span>
-                                <span className="font-medium text-base">{session.persona.adKnowledge}</span>
-                            </div>
-                            <div className="bg-white p-3 rounded-lg border border-slate-100">
-                                <span className="block text-slate-400 mb-1">自动驾驶接受度</span>
-                                <span className="font-medium text-base">{session.persona.adAcceptance}</span>
                             </div>
                         </div>
                         <div className="pt-2">
@@ -147,7 +151,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                 <section>
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">02 AI 智能洞察</h3>
                     <div className="text-slate-700 leading-relaxed whitespace-pre-wrap bg-indigo-50/50 p-6 rounded-xl border border-indigo-100">
-                        {session.aiSummary}
+                        {summary || session.aiSummary || "暂无总结"}
                     </div>
                 </section>
 
@@ -155,7 +159,11 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                 <section>
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">03 最终概念方案与评价</h3>
                     <div className="rounded-xl overflow-hidden border-2 border-slate-100 shadow-lg">
-                        <img src={finalImage} alt="Final Concept" className="w-full h-auto" />
+                        {finalImage ? (
+                            <img src={finalImage} alt="Final Concept" className="w-full h-auto" />
+                        ) : (
+                            <div className="w-full h-64 bg-slate-100 flex items-center justify-center text-slate-400">暂无图片</div>
+                        )}
                     </div>
                     <div className="mt-6 space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
