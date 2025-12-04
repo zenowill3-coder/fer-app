@@ -8,7 +8,7 @@ const TEXT_MODEL_ID = import.meta.env.VITE_DOUBAO_TEXT_ID;
 const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID;
 
 // ============================================================
-// 🛠️ 图片压缩工具 (维持极限压缩以通过 Vercel 网关)
+// 🛠️ 图片压缩工具
 // ============================================================
 async function compressImage(base64Str: string, maxWidth = 512, quality = 0.4): Promise<string> {
   return new Promise((resolve) => {
@@ -59,28 +59,23 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (适配 Seedream 4.0 + 1280x720)
+// 3. 核心工具 B: 生图 (Seedream 4.0 适配版)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
   const url = "/api/doubao/v3/images/generations";
   if (!IMAGE_MODEL_ID) throw new Error("生图模型ID未配置");
 
-  // 构造请求体 (适配 Seedream 4.0 参数)
   const requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
-    // ✅ 适配点：使用 1280x720 (Seedream 4.0 支持自定义宽高)
     width: 1280,
     height: 720,
-    // Seedream 4.0 推荐参数
-    sequential_image_generation: "auto" 
+    sequential_image_generation: "auto"
   };
 
-  // 图生图逻辑
   if (compressedBase64) {
     requestBody.image = compressedBase64;
-    // 0.7 是个比较稳妥的值，你可以根据需要微调
-    requestBody.strength = 0.7; 
+    requestBody.strength = 0.65; 
   }
 
   try {
@@ -90,16 +85,11 @@ async function callDoubaoImageAPI(prompt: string, compressedBase64: string | nul
       body: JSON.stringify(requestBody)
     });
 
-    if (!response.ok) {
-        const err = await response.text();
-        console.error("豆包API拒绝:", err);
-        return null;
-    }
+    if (!response.ok) return null;
     const data = await response.json();
     return data.data?.[0]?.url || null;
 
   } catch (error) {
-    console.error("网络失败:", error);
     return null;
   }
 }
@@ -113,10 +103,13 @@ function cleanJsonResult(text: string): string {
 // 4. 业务功能 Round 1 & 2
 // ============================================================
 export const generateFunctionConfigs = async (persona: Persona, selectedKeywords: string[]): Promise<GeneratedConfig[]> => {
+  // 移除了自动驾驶认知的 Prompt
   const prompt = `
     你是一位资深的未来汽车用户体验研究专家。
     基于以下用户画像和感性需求，生成 6 个最具创新性的功能配置。
-    【用户画像】家庭: ${persona.familyStructure}, 认知: ${persona.adKnowledge}
+    【用户画像】家庭: ${persona.familyStructure}, 出行频率: ${persona.travelFrequency}
+    【核心情绪】${persona.emotionalNeeds.join(', ')}
+    【社会价值】${persona.socialNeeds.join(', ')}
     【感性关键词】${selectedKeywords.join(', ')}
     【要求】输出纯 JSON 数组，包含 id, title, description。
   `;
@@ -145,7 +138,7 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
 };
 
 // ============================================================
-// 5. 业务功能 Round 3 (忠实翻译版 Prompt)
+// 5. 业务功能 Round 3 (6张图 + 完整 Prompt 继承)
 // ============================================================
 export const generateInteriorConcepts = async (
   persona: Persona, 
@@ -155,85 +148,85 @@ export const generateInteriorConcepts = async (
   styleImageBase64: string | null
 ): Promise<string[]> => {
   
+  // 1. 继承前两轮数据
   const r1Selected = r1Data.generatedConfigs.filter(c => r1Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   const r2Selected = r2Data.generatedConfigs.filter(c => r2Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   
-  // 🚀 【重点】: 这里是 Gemini 原始 Prompt 的严格中文翻译版
-  // 每一个构图指令都严格对应你原始代码中的英文指令
+  // 2. 忠实翻译的中文 Prompt
   const basePrompt = `
-    设计一款未来自动驾驶汽车内饰（概念艺术）。
+    设计一款未来感SUV汽车内饰（概念艺术）。
     
-    【设计输入】
-    - 目标用户: ${persona.familyStructure}
-    - 使用情境: 频繁使用 (${persona.travelFrequency}), 接受度: ${persona.adAcceptance}
-    - 情绪氛围: ${persona.emotionalNeeds.join(' ')}
-    - 风格描述: ${styleDesc} (请提取参考图的色调与光影，应用到内饰中)
+    【用户与需求 (Round 0)】
+    - 目标家庭: ${persona.familyStructure}
+    - 情绪体验: ${persona.emotionalNeeds.join(' ')}
+    - 风格描述: ${styleDesc} (如有参考图请提取其色调光影)
     
-    【重点可视化功能】
-    - ${r1Selected ? `功能特性: ${r1Selected}` : '智能座舱特性'}
-    - ${r2Selected ? `交互特性: ${r2Selected}` : '沉浸式体验'}
+    【核心配置 (Round 1 & 2)】
+    - 智能功能: ${r1Selected}
+    - 交互形式: ${r2Selected}
     
-    【关键相机与构图设置（必须严格遵守，忽略参考图的角度）】
-    1. 透视：广角高角度镜头 / 顶视广角镜头 (Wide-angle high-angle shot)。
-    2. 角度：从上方斜向下拍摄，提供内饰空间的宏观概览。
-    3. 相机位置：位于右后方上方。视点略高于右后座，透过前排座椅向前看向仪表板/驾驶区域。
-    4. 景深：全景深（所有物体都清晰聚焦）。
-    5. 内容限制：仅限内饰。不要渲染车身外壳、轮廓、车轮或街道。画面必须被内饰座舱填满。
-    6. 车窗：窗外仅展示抽象柔和光线或渐变色。不要出现具体的建筑物或风景。
-    
-    【视觉风格】
-    - 高质量，照片级真实感，未来主义渲染。
-    - 16:9 画幅。
-    - 电影级布光。
+    【关键构图 (严格执行)】
+    1. 视角：广角高角度镜头 / 顶视广角 (Wide-angle high-angle)。
+    2. 角度：从上方斜向下拍摄，展现内饰全貌。
+    3. 内容：仅限内饰，不要出现车外街道。
+    4. 画质：8k分辨率，OC渲染，电影级光效。
   `;
 
-  console.log("🚀 [Seedream4.0 + 忠实Prompt] 启动...");
+  console.log("🚀 [6张图模式] 启动...");
   
   let processedBase64: string | null = null;
   if (styleImageBase64) {
-    console.log("🚀 >> 检测到参考图，正在压缩...");
     try {
-        // 压缩至 512px 以确保通过网关
         processedBase64 = await compressImage(styleImageBase64, 512, 0.4);
-        console.log("🚀 >> 压缩成功");
-    } catch (e) {
-        console.error("压缩失败", e);
-        processedBase64 = null;
-    }
+    } catch (e) { processedBase64 = null; }
   }
 
+  // 3. 定义 6 种差异化变体
   const variations = [
-      "变体A：强调参考图的配色与材质感",
-      "变体B：更强的科技感内饰",
-      "变体C：更通透的居家氛围"
+      "变体1 (温暖居家): 强调柔软织物材质，暖色调氛围灯，像客厅一样的松弛感",
+      "变体2 (极简科技): 强调冷白与银灰色调，透明显示屏，无形科技感",
+      "变体3 (自然森系): 融入木纹与绿色元素，自然光感，通透呼吸感",
+      "变体4 (赛博运动): 强调深色背景与霓虹光条，高对比度，驾驶激情",
+      "变体5 (奢华商务): 强调皮革与金属质感，独立座椅布局，尊贵感",
+      "变体6 (亲子乐园): 强调色彩活泼，圆润造型，模块化可变空间"
   ];
 
   const validImages: string[] = [];
   
-  // 串行执行，确保稳定
-  for (const [index, v] of variations.entries()) {
-    try {
-      console.log(`🚀 >> 正在生成第 ${index + 1}/3 张 (1280x720)...`);
-      const imgUrl = await callDoubaoImageAPI(basePrompt + `\n(${v})`, processedBase64);
-      if (imgUrl) validImages.push(imgUrl);
-    } catch (e) {
-      console.error(`第 ${index + 1} 张生成失败`, e);
-    }
+  // 4. 分批生成 (Batch Processing) - 防止 502
+  const batchSize = 3;
+  for (let i = 0; i < variations.length; i += batchSize) {
+      const batch = variations.slice(i, i + batchSize);
+      console.log(`🚀 >> 正在生成第 ${i+1}-${i+batch.length} 张...`);
+      
+      const promises = batch.map(v => callDoubaoImageAPI(basePrompt + `\n(${v})`, processedBase64));
+      const results = await Promise.all(promises);
+      
+      results.forEach(url => {
+          if (url) validImages.push(url);
+      });
+
+      // 强制休息 1 秒
+      if (i + batchSize < variations.length) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+      }
   }
 
+  // 兜底补齐到 6 张
   const placeholders = [
     "https://picsum.photos/1280/720?random=1",
     "https://picsum.photos/1280/720?random=2",
-    "https://picsum.photos/1280/720?random=3"
+    "https://picsum.photos/1280/720?random=3",
+    "https://picsum.photos/1280/720?random=4",
+    "https://picsum.photos/1280/720?random=5",
+    "https://picsum.photos/1280/720?random=6"
   ];
 
-  let finalImages = [...validImages];
-  let pIndex = 0;
-  while (finalImages.length < 3) {
-      finalImages.push(placeholders[pIndex % 3]);
-      pIndex++;
+  while (validImages.length < 6) {
+      validImages.push(placeholders[validImages.length % 6]);
   }
-  return finalImages;
+  
+  return validImages;
 };
 
 export const generateSessionSummary = async (session: Session): Promise<string> => {
