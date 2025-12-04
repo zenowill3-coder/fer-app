@@ -59,7 +59,7 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (Seedream 4.0 + 1280x720)
+// 3. 核心工具 B: 生图 (分辨率修复)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
   const url = "/api/doubao/v3/images/generations";
@@ -68,14 +68,16 @@ async function callDoubaoImageAPI(prompt: string, compressedBase64: string | nul
   const requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
-    width: 1280,
-    height: 720,
+    // 🛠️ 【关键修复】: 
+    // 之前的 width/height 分离写法被忽略了。
+    // 改为 size 字符串格式 "1280*720" (宽*高)，这是兼容性最强的写法。
+    size: "1280*720", 
     sequential_image_generation: "auto"
   };
 
   if (compressedBase64) {
     requestBody.image = compressedBase64;
-    requestBody.strength = 0.7; 
+    requestBody.strength = 0.65; 
   }
 
   try {
@@ -100,7 +102,7 @@ function cleanJsonResult(text: string): string {
 }
 
 // ============================================================
-// 4. 业务功能 Round 1 & 2 (⚡️ 文案极简优化 ⚡️)
+// 4. 业务功能 Round 1 & 2
 // ============================================================
 export const generateFunctionConfigs = async (persona: Persona, selectedKeywords: string[]): Promise<GeneratedConfig[]> => {
   const prompt = `
@@ -181,7 +183,7 @@ export const generateInteriorConcepts = async (
     4. 画质：8k分辨率，OC渲染，电影级光效。
   `;
 
-  console.log("🚀 [6张图模式] 启动...");
+  console.log("🚀 [16:9 分辨率修复] 启动...");
   
   let processedBase64: string | null = null;
   if (styleImageBase64) {
