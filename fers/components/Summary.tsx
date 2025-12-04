@@ -41,19 +41,24 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       { key: 'color', label: '色彩' },
   ];
 
-  // 🛠️ 核心修复：通过 Vercel 代理下载图片，解决 PDF 导出空白
+  // 🛠️ 核心修复：将豆包图片 URL 转换为 Vercel 代理 URL
   const convertImageToBase64 = async (originalUrl: string): Promise<string> => {
+    // 报错日志里出现的那个长域名
     const doubaoDomain = "ark-content-generation-v2-cn-beijing.tos-cn-beijing.volces.com";
     let fetchUrl = originalUrl;
 
-    // 如果是豆包图片，走 /proxy-image 代理
+    // 如果图片来自豆包，强行替换为 /proxy-image/ 开头的路径
     if (originalUrl.includes(doubaoDomain)) {
+        // 逻辑：把 "https://域名" 替换为 "/proxy-image"
+        // 结果例：/proxy-image/doubao-seedream-4-0/xxx.jpg?signature=...
         fetchUrl = originalUrl.replace(`https://${doubaoDomain}`, '/proxy-image');
     }
 
     try {
+      // 请求自己的服务器 (Vercel)，这就不会有 CORS 问题了
       const response = await fetch(fetchUrl); 
-      if (!response.ok) throw new Error("Network response was not ok");
+      if (!response.ok) throw new Error(`Proxy fetch failed: ${response.status}`);
+      
       const blob = await response.blob();
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -61,7 +66,8 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         reader.readAsDataURL(blob);
       });
     } catch (e) {
-      console.warn("Image fetch failed, keeping original URL", e);
+      console.warn("图片转 Base64 失败，PDF 中可能无法显示该图:", e);
+      // 如果转换失败，返回原链接，网页上至少能看，但 PDF 里会是白的
       return originalUrl;
     }
   };
@@ -70,32 +76,44 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
     if (!contentRef.current) return;
     setExporting(true);
     
+    // 1. 抓取所有图片元素
     const imgElements = contentRef.current.querySelectorAll('img');
-    const originalSrcs = Array.from(imgElements).map(img => img.src);
+    const originalSrcs: string[] = []; // 用于稍后恢复
 
     try {
-        // 1. 预处理：将所有图片替换为 Base64
-        const promises = Array.from(imgElements).map(async (img) => {
+        // 2. 逐个将图片替换为 Base64
+        const promises = Array.from(imgElements).map(async (img, index) => {
+            originalSrcs[index] = img.src; // 备份原地址
+            
+            // 如果已经是 Base64 (比如本地上传的参考图)，跳过
             if (img.src.startsWith('data:')) return;
+            
             try {
+                // 尝试转换
                 const base64 = await convertImageToBase64(img.src);
+                // 只有成功拿到 data: 开头的数据才替换
                 if (base64.startsWith('data:')) {
                     img.src = base64;
                 }
             } catch (error) {
-                console.error("Image convert failed", error);
+                console.error("Image convert error", error);
             }
         });
 
+        // 等待所有图片处理完毕
         await Promise.all(promises);
-        await new Promise(r => setTimeout(r, 500));
+        
+        // 给一点缓冲时间让 DOM 更新
+        await new Promise(r => setTimeout(r, 800));
 
+        // 3. 开始截图
         const canvas = await html2canvas(contentRef.current, { 
             scale: 2, 
-            useCORS: true, 
+            useCORS: true, // 配合 Base64 使用
             allowTaint: true 
         });
         
+        // 4. 生成 PDF
         const imgData = canvas.toDataURL('image/jpeg', 0.95);
         const pdf = new jsPDF('p', 'mm', 'a4');
         const pdfWidth = pdf.internal.pageSize.getWidth();
@@ -107,9 +125,11 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         let heightLeft = imgHeight;
         let position = 0;
 
+        // 第一页
         pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, imgHeight * scaleFactor);
         heightLeft -= (pdfHeight / scaleFactor);
 
+        // 分页逻辑
         while (heightLeft > 0) {
             position = heightLeft - imgHeight;
             pdf.addPage();
@@ -121,10 +141,13 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
 
     } catch (e) {
         console.error("PDF Export Error", e);
-        alert("导出 PDF 失败，请尝试截图保存。");
+        alert("导出 PDF 遇到问题，建议直接使用浏览器的打印功能 (Ctrl+P / Cmd+P) 另存为 PDF。");
     } finally {
+        // 5. 无论成功失败，都要把图片链接恢复回去，否则网页上图片会失效
         Array.from(imgElements).forEach((img, index) => {
-            img.src = originalSrcs[index];
+            if (originalSrcs[index]) {
+                img.src = originalSrcs[index];
+            }
         });
         setExporting(false);
     }
@@ -148,6 +171,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       ) : (
         <>
             <div ref={contentRef} className="bg-white p-10 shadow-lg rounded-none md:rounded-2xl space-y-8 text-slate-800">
+                {/* 报告头部 */}
                 <div className="border-b-2 border-slate-900 pb-6 mb-8">
                     <h2 className="text-4xl font-extrabold text-slate-900 mb-2">未来体验研究报告</h2>
                     <div className="flex justify-between text-slate-500 text-sm mt-4">
@@ -156,7 +180,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                     </div>
                 </div>
 
-                {/* Persona */}
+                {/* 01 用户画像 */}
                 <section className="bg-slate-50 p-6 rounded-xl border border-slate-100">
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider flex items-center gap-2">
                         <User size={20} className="text-indigo-600" />
@@ -172,7 +196,6 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                                 <span className="block text-slate-400 mb-1">出行频率</span>
                                 <span className="font-medium text-base">{session.persona.travelFrequency}</span>
                             </div>
-                            {/* ⚠️ 关键修改：已彻底删除"自动驾驶认知"和"接受度"的展示代码，防止报错 */}
                         </div>
                         <div className="pt-2">
                              <span className="block text-slate-400 text-sm mb-2">深层需求</span>
@@ -188,7 +211,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                     </div>
                 </section>
 
-                {/* AI Summary */}
+                {/* 02 AI 总结 */}
                 <section>
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">02 AI 智能洞察</h3>
                     <div className="text-slate-700 leading-relaxed whitespace-pre-wrap bg-indigo-50/50 p-6 rounded-xl border border-indigo-100">
@@ -196,7 +219,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                     </div>
                 </section>
 
-                {/* Visual */}
+                {/* 03 最终方案 */}
                 <section>
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">03 最终概念方案与评价</h3>
                     <div className="rounded-xl overflow-hidden border-2 border-slate-100 shadow-lg">
@@ -205,11 +228,13 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                                 src={finalImage} 
                                 alt="Final Concept" 
                                 className="w-full h-auto" 
+                                // ⚠️ 注意：这里不加 crossOrigin，因为我们会在导出时手动替换 URL
                             />
                         ) : (
                             <div className="w-full h-64 bg-slate-100 flex items-center justify-center text-slate-400">暂无图片</div>
                         )}
                     </div>
+                    {/* 评价内容 */}
                     <div className="mt-6 space-y-4">
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4">
                             {evaluationCategories.map(cat => (
@@ -229,7 +254,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                     </div>
                 </section>
 
-                {/* Round 1 & 2 Details */}
+                {/* 04 详细配置 */}
                 <div className="grid md:grid-cols-2 gap-8 pt-4">
                     <section>
                         <h3 className="text-sm font-bold text-slate-900 mb-3 uppercase tracking-wider border-b border-slate-200 pb-1">功能配置 (Round 1)</h3>
