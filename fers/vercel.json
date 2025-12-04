@@ -5,7 +5,7 @@
       "destination": "https://ark.cn-beijing.volces.com/api/:match*"
     },
     {
-      "source": "/proxy-image",
+      "source": "/proxy-image/:path*",
       "destination": "https://ark-content-generation-v2-cn-beijing.tos-cn-beijing.volces.com/:path*"
     }
   ]
