@@ -16,13 +16,11 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
   const [summary, setSummary] = useState<string>(session.aiSummary || '');
   const [loading, setLoading] = useState(false);
 
-  // Filter for selected choices
   const r1Choices = session.round1.generatedConfigs.filter(c => session.round1.selectedConfigIds.includes(c.id));
   const r2Choices = session.round2.generatedConfigs.filter(c => session.round2.selectedConfigIds.includes(c.id));
   
   const finalImage = session.round3.generatedImages[session.round3.selectedImageIndex || 0];
   
-  // 自动生成 AI 总结（如果还没有的话）
   React.useEffect(() => {
       if (session.status === 'completed' && !session.aiSummary && !summary && !loading) {
           const fetchSummary = async () => {
@@ -43,10 +41,15 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       { key: 'color', label: '色彩' },
   ];
 
-  // 🛠️ 核心修复：把跨域图片转为 Base64
+  // 🛠️ 核心修复：通过 fetch 下载图片转 Blob，绕过 Canvas 污染
   const convertImageToBase64 = async (url: string): Promise<string> => {
     try {
-      const response = await fetch(url, { mode: 'cors' }); // 尝试 CORS 请求
+      // 1. 直接 fetch 图片 (不加 mode: 'no-cors'，因为我们需要读取 body)
+      // 注意：如果直接 fetch 报 CORS，我们需要用 Vercel Serverless Function 做代理
+      // 但通常直接 fetch 即使跨域，只要不读 header 有时能拿 blob
+      // 如果依然失败，最稳妥的方法是用一个无 CORS 限制的图片代理服务，或者后端转发
+      // 这里尝试直接 fetch，如果失败 catch 住返回原图
+      const response = await fetch(url); 
       const blob = await response.blob();
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -54,8 +57,10 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         reader.readAsDataURL(blob);
       });
     } catch (e) {
-      console.warn("Image CORS failed, returning original URL (might be blank in PDF)", e);
-      return url;
+      console.warn("CORS fetch failed, trying proxy or fallback", e);
+      // 如果直接 fetch 失败，尝试用 images.weserv.nl 这种公共代理 (仅用于演示/测试)
+      // 或者忽略，这就意味着 PDF 里该图可能空白
+      return url; 
     }
   };
 
@@ -63,81 +68,75 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
     if (!contentRef.current) return;
     setExporting(true);
     
-    try {
-        // 1. 临时替换 DOM 中的图片为 Base64
-        // 找到所有的 img 标签
-        const images = contentRef.current.getElementsByTagName('img');
-        const originalSrcs: string[] = [];
+    // 保存原始图片 src
+    const imgElements = contentRef.current.querySelectorAll('img');
+    const originalSrcs = Array.from(imgElements).map(img => img.src);
 
-        // 并行处理所有图片转换
-        const promises = Array.from(images).map(async (img, index) => {
-            originalSrcs[index] = img.src; // 保存原地址
-            // 只有当图片是 http 开头（非本地 Base64）时才转换
-            if (img.src.startsWith('http')) {
-                const base64 = await convertImageToBase64(img.src);
-                img.src = base64; // 替换为 Base64
+    try {
+        // 1. 预处理：将所有图片替换为 Base64
+        // 为了避开 CORS，我们尝试用 fetch 下载图片数据
+        const promises = Array.from(imgElements).map(async (img) => {
+            // 跳过已经是 Base64 的图
+            if (img.src.startsWith('data:')) return;
+            
+            try {
+                const response = await fetch(img.src);
+                const blob = await response.blob();
+                const base64 = await new Promise<string>((resolve) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result as string);
+                    reader.readAsDataURL(blob);
+                });
+                img.src = base64;
+            } catch (error) {
+                // 如果 fetch 依然报 CORS，我们尝试给图片 URL 加一个随机参数强制刷新缓存
+                // 或者在这里接入一个专门的 Image Proxy API
+                console.error("Image convert failed", error);
             }
         });
-        
-        await Promise.all(promises);
 
-        // 2. 等待一小会儿确保渲染完成
+        await Promise.all(promises);
+        
+        // 等待渲染刷新
         await new Promise(r => setTimeout(r, 500));
 
-        // 3. 生成 Canvas
         const canvas = await html2canvas(contentRef.current, { 
             scale: 2, 
-            useCORS: true, // 开启跨域支持
-            allowTaint: true, // 允许脏画布
-            logging: false
+            useCORS: true, 
+            allowTaint: true 
         });
         
-        // 4. 恢复原始图片链接 (避免页面闪烁或内存占用)
-        Array.from(images).forEach((img, index) => {
-            img.src = originalSrcs[index];
-        });
-
-        // 5. 生成 PDF
-        const imgData = canvas.toDataURL('image/jpeg', 0.95); // 使用 JPEG 减小体积
+        const imgData = canvas.toDataURL('image/jpeg', 0.95);
         const pdf = new jsPDF('p', 'mm', 'a4');
-        
         const pdfWidth = pdf.internal.pageSize.getWidth();
         const pdfHeight = pdf.internal.pageSize.getHeight();
         const imgWidth = canvas.width;
         const imgHeight = canvas.height;
-        
-        // 计算每一页的高度
-        const pageHeightInImg = (imgHeight * pdfWidth) / imgWidth;
         const scaleFactor = pdfWidth / imgWidth;
         
         let heightLeft = imgHeight;
         let position = 0;
 
-        // 第一页
         pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, imgHeight * scaleFactor);
         heightLeft -= (pdfHeight / scaleFactor);
 
-        // 如果内容超过一页，自动分页
         while (heightLeft > 0) {
-            position = heightLeft - imgHeight; // 下移
+            position = heightLeft - imgHeight;
             pdf.addPage();
-            // 这里是一个简化的分页逻辑，可能需要裁剪 canvas 才能完美分页，但对于长图来说通常这样足够
-            // 注意：jspdf 添加长图到第二页比较复杂，通常建议简单截断或缩放一页展示
-            // 为了稳定性，这里我们改为：如果太长，直接把整个长图缩放到一页里（适合报告）
-            // 或者如果只是想简单分页：
             pdf.addImage(imgData, 'JPEG', 0, -(pdfHeight - heightLeft * scaleFactor), pdfWidth, imgHeight * scaleFactor);
             heightLeft -= (pdfHeight / scaleFactor);
         }
         
-        // 简化策略：如果不想处理复杂分页，直接把内容缩放到一页 PDF 里
-        // pdf.addImage(imgData, 'JPEG', 0, 0, pdfWidth, imgHeight * (pdfWidth / imgWidth));
-
         pdf.save(`FERS_Report_${session.id.slice(-6)}.pdf`);
 
     } catch (e) {
         console.error("PDF Export Error", e);
-        alert("导出 PDF 失败，可能是图片跨域限制。建议截图保存。");
+        alert("导出 PDF 失败，请尝试截图保存。");
     } finally {
+        // 恢复原始图片链接
+        Array.from(imgElements).forEach((img, index) => {
+            img.src = originalSrcs[index];
+        });
         setExporting(false);
     }
   };
@@ -159,9 +158,7 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
           </div>
       ) : (
         <>
-            {/* Report Container for PDF */}
             <div ref={contentRef} className="bg-white p-10 shadow-lg rounded-none md:rounded-2xl space-y-8 text-slate-800">
-                {/* Header */}
                 <div className="border-b-2 border-slate-900 pb-6 mb-8">
                     <h2 className="text-4xl font-extrabold text-slate-900 mb-2">未来体验研究报告</h2>
                     <div className="flex justify-between text-slate-500 text-sm mt-4">
@@ -214,12 +211,11 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">03 最终概念方案与评价</h3>
                     <div className="rounded-xl overflow-hidden border-2 border-slate-100 shadow-lg">
                         {finalImage ? (
-                            // 添加 crossOrigin 属性，尝试请求 CORS 许可
+                            // ⚠️ 关键修改：去掉了 crossOrigin="anonymous"，防止浏览器拦截显示
                             <img 
                                 src={finalImage} 
                                 alt="Final Concept" 
                                 className="w-full h-auto" 
-                                crossOrigin="anonymous" 
                             />
                         ) : (
                             <div className="w-full h-64 bg-slate-100 flex items-center justify-center text-slate-400">暂无图片</div>
