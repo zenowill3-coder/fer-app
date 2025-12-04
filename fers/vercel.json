@@ -3,6 +3,10 @@
     {
       "source": "/api/doubao/:match*",
       "destination": "https://ark.cn-beijing.volces.com/api/:match*"
+    },
+    {
+      "source": "/proxy-image",
+      "destination": "https://ark-content-generation-v2-cn-beijing.tos-cn-beijing.volces.com/:path*"
     }
   ]
 }
