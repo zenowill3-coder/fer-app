@@ -8,7 +8,7 @@ const TEXT_MODEL_ID = import.meta.env.VITE_DOUBAO_TEXT_ID;
 const IMAGE_MODEL_ID = import.meta.env.VITE_DOUBAO_IMAGE_ID;
 
 // ============================================================
-// 🛠️ 极限图片压缩
+// 🛠️ 图片压缩工具 (维持极限压缩以通过 Vercel 网关)
 // ============================================================
 async function compressImage(base64Str: string, maxWidth = 512, quality = 0.4): Promise<string> {
   return new Promise((resolve) => {
@@ -26,7 +26,6 @@ async function compressImage(base64Str: string, maxWidth = 512, quality = 0.4): 
       canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (!ctx) { resolve(img.src); return; }
-      
       ctx.drawImage(img, 0, 0, width, height);
       resolve(canvas.toDataURL('image/jpeg', quality));
     };
@@ -60,23 +59,27 @@ async function callDoubaoTextAPI(messages: any[]) {
 }
 
 // ============================================================
-// 3. 核心工具 B: 生图 (2K 高清版)
+// 3. 核心工具 B: 生图 (适配 Seedream 4.0 + 1280x720)
 // ============================================================
 async function callDoubaoImageAPI(prompt: string, compressedBase64: string | null = null) {
   const url = "/api/doubao/v3/images/generations";
   if (!IMAGE_MODEL_ID) throw new Error("生图模型ID未配置");
 
+  // 构造请求体 (适配 Seedream 4.0 参数)
   const requestBody: any = {
     model: IMAGE_MODEL_ID,
     prompt: prompt,
-    // ✅ 必须用 2k，否则模型会报 400 错误 (Pixel count too low)
-    size: "2k", 
-    sequential_image_generation: "auto"
+    // ✅ 适配点：使用 1280x720 (Seedream 4.0 支持自定义宽高)
+    width: 1280,
+    height: 720,
+    // Seedream 4.0 推荐参数
+    sequential_image_generation: "auto" 
   };
 
+  // 图生图逻辑
   if (compressedBase64) {
     requestBody.image = compressedBase64;
-    // 0.7 是个比较安全的值，太高(0.9)容易崩坏，太低(0.5)不像内饰
+    // 0.7 是个比较稳妥的值，你可以根据需要微调
     requestBody.strength = 0.7; 
   }
 
@@ -142,7 +145,7 @@ export const generateInteractionConfigs = async (persona: Persona, selectedKeywo
 };
 
 // ============================================================
-// 5. 业务功能 Round 3
+// 5. 业务功能 Round 3 (忠实翻译版 Prompt)
 // ============================================================
 export const generateInteriorConcepts = async (
   persona: Persona, 
@@ -155,35 +158,44 @@ export const generateInteriorConcepts = async (
   const r1Selected = r1Data.generatedConfigs.filter(c => r1Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   const r2Selected = r2Data.generatedConfigs.filter(c => r2Data.selectedConfigIds.includes(c.id)).map(c => c.title).join('、');
   
+  // 🚀 【重点】: 这里是 Gemini 原始 Prompt 的严格中文翻译版
+  // 每一个构图指令都严格对应你原始代码中的英文指令
   const basePrompt = `
-    (车辆内饰概念图:1.5), 2050年自动驾驶座舱内部视角。
-    ❌ 不要画车身外观，❌ 不要画街道。✅ 只画车内座椅和仪表台。
+    设计一款未来自动驾驶汽车内饰（概念艺术）。
     
     【设计输入】
     - 目标用户: ${persona.familyStructure}
-    - 风格参考: ${styleDesc} (请提取参考图的色调与光影，应用到内饰中)
+    - 使用情境: 频繁使用 (${persona.travelFrequency}), 接受度: ${persona.adAcceptance}
     - 情绪氛围: ${persona.emotionalNeeds.join(' ')}
+    - 风格描述: ${styleDesc} (请提取参考图的色调与光影，应用到内饰中)
     
-    【功能可视化】
-    - ${r1Selected}
-    - ${r2Selected}
+    【重点可视化功能】
+    - ${r1Selected ? `功能特性: ${r1Selected}` : '智能座舱特性'}
+    - ${r2Selected ? `交互特性: ${r2Selected}` : '沉浸式体验'}
     
-    【构图要求】
-    1. 视角: 广角俯视镜头 (Interior Wide-angle top-down)。
-    2. 内容: 100% 车辆内部画面。
+    【关键相机与构图设置（必须严格遵守，忽略参考图的角度）】
+    1. 透视：广角高角度镜头 / 顶视广角镜头 (Wide-angle high-angle shot)。
+    2. 角度：从上方斜向下拍摄，提供内饰空间的宏观概览。
+    3. 相机位置：位于右后方上方。视点略高于右后座，透过前排座椅向前看向仪表板/驾驶区域。
+    4. 景深：全景深（所有物体都清晰聚焦）。
+    5. 内容限制：仅限内饰。不要渲染车身外壳、轮廓、车轮或街道。画面必须被内饰座舱填满。
+    6. 车窗：窗外仅展示抽象柔和光线或渐变色。不要出现具体的建筑物或风景。
     
     【视觉风格】
-    - 8k分辨率，OC渲染，电影级光效。
+    - 高质量，照片级真实感，未来主义渲染。
+    - 16:9 画幅。
+    - 电影级布光。
   `;
 
-  console.log("🛡️ [2K 修复版] 启动...");
+  console.log("🚀 [Seedream4.0 + 忠实Prompt] 启动...");
   
   let processedBase64: string | null = null;
   if (styleImageBase64) {
-    console.log("🛡️ >> 极限压缩参考图 (Max 512px)...");
+    console.log("🚀 >> 检测到参考图，正在压缩...");
     try {
+        // 压缩至 512px 以确保通过网关
         processedBase64 = await compressImage(styleImageBase64, 512, 0.4);
-        console.log("🛡️ >> 压缩成功");
+        console.log("🚀 >> 压缩成功");
     } catch (e) {
         console.error("压缩失败", e);
         processedBase64 = null;
@@ -198,21 +210,21 @@ export const generateInteriorConcepts = async (
 
   const validImages: string[] = [];
   
-  // 串行执行
+  // 串行执行，确保稳定
   for (const [index, v] of variations.entries()) {
     try {
-      console.log(`🛡️ >> 正在生成第 ${index + 1}/3 张 (2k模式)...`);
+      console.log(`🚀 >> 正在生成第 ${index + 1}/3 张 (1280x720)...`);
       const imgUrl = await callDoubaoImageAPI(basePrompt + `\n(${v})`, processedBase64);
       if (imgUrl) validImages.push(imgUrl);
     } catch (e) {
-      console.error(`第 ${index + 1} 张生成遇到严重错误`, e);
+      console.error(`第 ${index + 1} 张生成失败`, e);
     }
   }
 
   const placeholders = [
-    "https://picsum.photos/1600/900?random=1",
-    "https://picsum.photos/1600/900?random=2",
-    "https://picsum.photos/1600/900?random=3"
+    "https://picsum.photos/1280/720?random=1",
+    "https://picsum.photos/1280/720?random=2",
+    "https://picsum.photos/1280/720?random=3"
   ];
 
   let finalImages = [...validImages];
