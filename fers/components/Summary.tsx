@@ -41,15 +41,23 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
       { key: 'color', label: '色彩' },
   ];
 
-  // 🛠️ 核心修复：通过 fetch 下载图片转 Blob，绕过 Canvas 污染
-  const convertImageToBase64 = async (url: string): Promise<string> => {
+  // 🛠️ 核心修复：通过 Vercel 代理下载图片
+  const convertImageToBase64 = async (originalUrl: string): Promise<string> => {
+    // 1. 判断是否是豆包图片
+    const doubaoDomain = "ark-content-generation-v2-cn-beijing.tos-cn-beijing.volces.com";
+    let fetchUrl = originalUrl;
+
+    if (originalUrl.includes(doubaoDomain)) {
+        // 替换为我们的代理路径
+        // 原始: https://ark...com/path/to/image.jpg?params
+        // 代理: /proxy-image/path/to/image.jpg?params
+        fetchUrl = originalUrl.replace(`https://${doubaoDomain}`, '/proxy-image');
+        // console.log("Proxying image:", fetchUrl);
+    }
+
     try {
-      // 1. 直接 fetch 图片 (不加 mode: 'no-cors'，因为我们需要读取 body)
-      // 注意：如果直接 fetch 报 CORS，我们需要用 Vercel Serverless Function 做代理
-      // 但通常直接 fetch 即使跨域，只要不读 header 有时能拿 blob
-      // 如果依然失败，最稳妥的方法是用一个无 CORS 限制的图片代理服务，或者后端转发
-      // 这里尝试直接 fetch，如果失败 catch 住返回原图
-      const response = await fetch(url); 
+      const response = await fetch(fetchUrl); 
+      if (!response.ok) throw new Error("Network response was not ok");
       const blob = await response.blob();
       return new Promise((resolve) => {
         const reader = new FileReader();
@@ -57,10 +65,8 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
         reader.readAsDataURL(blob);
       });
     } catch (e) {
-      console.warn("CORS fetch failed, trying proxy or fallback", e);
-      // 如果直接 fetch 失败，尝试用 images.weserv.nl 这种公共代理 (仅用于演示/测试)
-      // 或者忽略，这就意味着 PDF 里该图可能空白
-      return url; 
+      console.warn("Image fetch failed, keeping original URL", e);
+      return originalUrl;
     }
   };
 
@@ -74,23 +80,16 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
 
     try {
         // 1. 预处理：将所有图片替换为 Base64
-        // 为了避开 CORS，我们尝试用 fetch 下载图片数据
         const promises = Array.from(imgElements).map(async (img) => {
-            // 跳过已经是 Base64 的图
             if (img.src.startsWith('data:')) return;
             
             try {
-                const response = await fetch(img.src);
-                const blob = await response.blob();
-                const base64 = await new Promise<string>((resolve) => {
-                    const reader = new FileReader();
-                    reader.onloadend = () => resolve(reader.result as string);
-                    reader.readAsDataURL(blob);
-                });
-                img.src = base64;
+                const base64 = await convertImageToBase64(img.src);
+                // 只有成功转为 Base64 才替换，否则保留原链接避免破图
+                if (base64.startsWith('data:')) {
+                    img.src = base64;
+                }
             } catch (error) {
-                // 如果 fetch 依然报 CORS，我们尝试给图片 URL 加一个随机参数强制刷新缓存
-                // 或者在这里接入一个专门的 Image Proxy API
                 console.error("Image convert failed", error);
             }
         });
@@ -211,7 +210,6 @@ const Summary: React.FC<SummaryProps> = ({ session, onDone }) => {
                     <h3 className="text-lg font-bold text-slate-900 mb-4 uppercase tracking-wider border-b border-slate-200 pb-2">03 最终概念方案与评价</h3>
                     <div className="rounded-xl overflow-hidden border-2 border-slate-100 shadow-lg">
                         {finalImage ? (
-                            // ⚠️ 关键修改：去掉了 crossOrigin="anonymous"，防止浏览器拦截显示
                             <img 
                                 src={finalImage} 
                                 alt="Final Concept" 
